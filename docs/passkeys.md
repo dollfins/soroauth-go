@@ -250,9 +250,10 @@ your backend because only it knows the expected origin (WebAuthn Level 3,
 
 The ES256 signature is over the signed bytes — `authenticatorData` followed by
 `SHA-256(clientDataJSON)` — so verify it against exactly those bytes. The
-assertion's `signature` field is DER-encoded; the snippet below takes the raw
-`(r, s)` halves as parameters because DER parsing is out of scope here (issue
-#25 tracks a full parser):
+assertion's `signature` field is DER-encoded; parse it at the WebAuthn
+boundary, then use soroauth's P-256 primitives with the resulting raw `(r, s)`
+values. `VerifySecp256r1` accepts the fixed-width low-S `r || s` form used by
+the Soroban signature value.
 
 ```go
 // The signature is over the signed bytes — authenticatorData followed by
@@ -274,9 +275,12 @@ if !ecdsa.Verify(pub, signed, r, s) {
 // unsorted ScMap as Error(Object, InvalidInput) (rs-soroban-env issue
 // #1510 records how opaque that failure is) — so a hand-rolled shape
 // fails there, on-chain, rather than here.
-pubRaw := pub.X.Bytes()
+pubRaw := elliptic.Marshal(elliptic.P256(), pub.X, pub.Y)
 pubVal := xdr.ScBytes(pubRaw)
-sigVal := xdr.ScBytes(sigR[:])
+signature := make([]byte, soroauth.Secp256r1SignatureSize)
+r.FillBytes(signature[:32])
+s.FillBytes(signature[32:])
+sigVal := xdr.ScBytes(signature)
 keySym := xdr.ScSymbol("public_key")
 sigSym := xdr.ScSymbol("signature")
 m := xdr.ScMap{
@@ -305,9 +309,9 @@ What `NewPasskeySigner` does — and deliberately does not do — matters:
   and fails with `ErrVerificationFailed` before invoking your signing
   function if a required flag is missing.
 - **It does no cryptographic verification.** The ES256 verification above is
-  *your* code; soroauth does not have P-256 primitives yet (issue #25). If you
-  skip it, `AuthorizeEntry` will happily write an unverified ScVal into the
-  entry — the failure then happens on-chain, after fees.
+  your responsibility; call `VerifySecp256r1` before returning the ScVal. If
+  you skip it, `AuthorizeEntry` will happily write an unverified value into
+  the entry — the failure then happens on-chain, after fees.
 - **It does not define the ScVal shape.** The signing function you pass
   returns the `ScVal` verbatim; `SignerFunc`'s doc comment applies equally
   here.

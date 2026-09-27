@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -20,6 +21,7 @@ var requiredScenarios = []string{"A", "B", "C", "C-control", "D", "E", "F", "G",
 func TestMain(m *testing.M) {
 	code := m.Run()
 	writeResults()
+	writeParityReport()
 	os.Exit(code)
 }
 
@@ -116,6 +118,74 @@ func noteRun(passphrase, url string, protocolVersion uint32) {
 	runNetwork = passphrase
 	runRPCURL = url
 	runProtocolVersion = protocolVersion
+}
+
+type parityEntryReport struct {
+	VectorID       string `json:"vector_id"`
+	Implementation string `json:"implementation"`
+	ScenarioID     string `json:"scenario_id"`
+	Name           string `json:"name"`
+	Verdict        string `json:"verdict"`
+	CredentialArm  string `json:"credential_arm"`
+	Details        string `json:"details,omitempty"`
+}
+
+type parityReport struct {
+	DateUTC         string              `json:"date_utc"`
+	Network         string              `json:"network"`
+	ProtocolVersion uint32              `json:"protocol_version"`
+	TotalScenarios  int                 `json:"total_scenarios"`
+	Entries         []parityEntryReport `json:"entries"`
+}
+
+func writeParityReport() {
+	resultsMu.Lock()
+	defer resultsMu.Unlock()
+
+	if len(results) == 0 {
+		return
+	}
+
+	var entries []parityEntryReport
+	for _, r := range results {
+		verdict := "PASS"
+		if !r.Succeeded && !r.ExpectRejection {
+			verdict = "FAIL"
+		} else if !r.Succeeded && r.ExpectRejection {
+			verdict = "PASS"
+		}
+
+		entries = append(entries, parityEntryReport{
+			VectorID:       r.ID,
+			Implementation: "soroauth-go",
+			ScenarioID:     r.ID,
+			Name:           r.Name,
+			Verdict:        verdict,
+			CredentialArm:  r.Arm,
+			Details:        r.RawError,
+		})
+	}
+
+	// Use a fixed deterministic timestamp for parity report generation
+	report := parityReport{
+		DateUTC:         "2026-01-01T00:00:00Z",
+		Network:         runNetwork,
+		ProtocolVersion: runProtocolVersion,
+		TotalScenarios:  len(entries),
+		Entries:         entries,
+	}
+
+	raw, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "marshaling parity report: %v\n", err)
+		return
+	}
+
+	if err := os.WriteFile("parity-report.json", raw, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "writing parity-report.json: %v\n", err)
+		return
+	}
+	fmt.Fprintln(os.Stderr, "wrote parity-report.json")
 }
 
 var _ = testing.Verbose

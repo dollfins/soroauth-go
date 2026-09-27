@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/leanovate/gopter"
@@ -43,6 +44,7 @@ func TestParseAddressFormatAddressProperty(t *testing.T) {
 	properties.Property("corrupted checksum rejected", propCorruptedChecksumRejected())
 	properties.Property("truncated address rejected", propTruncatedRejected())
 	properties.Property("empty string rejected", propEmptyStringRejected())
+	properties.Property("case-altered address rejected", propCaseAlteredRejected())
 
 	properties.TestingRun(t, gopter.ConsoleReporter(true))
 }
@@ -348,6 +350,21 @@ func propEmptyStringRejected() gopter.Prop {
 	}, gen.Const(struct{}{}))
 }
 
+// propCaseAlteredRejected pins the canonicality rule from the other side: a
+// valid address whose case is changed is no longer canonical base32, so
+// ParseAddress must refuse it rather than recover the same key.
+func propCaseAlteredRejected() gopter.Prop {
+	return prop.ForAll(func(address string) bool {
+		lowered := strings.ToLower(address)
+		if lowered == address {
+			// Nothing to alter; not a case this property speaks about.
+			return true
+		}
+		_, err := ParseAddress(lowered)
+		return err != nil
+	}, gen.OneGenOf(genAccountAddressGen(), genContractAddressGen()))
+}
+
 // TestParseAddressFormatAddressDeterministic runs a deterministic subset of
 // property tests using fixed seeds for CI reproducibility.
 func TestParseAddressFormatAddressDeterministic(t *testing.T) {
@@ -372,6 +389,7 @@ func TestParseAddressFormatAddressDeterministic(t *testing.T) {
 	properties.Property("corrupted checksum rejected (deterministic)", propCorruptedChecksumRejected())
 	properties.Property("truncated address rejected (deterministic)", propTruncatedRejected())
 	properties.Property("empty string rejected (deterministic)", propEmptyStringRejected())
+	properties.Property("case-altered address rejected (deterministic)", propCaseAlteredRejected())
 
 	properties.TestingRun(t, gopter.ConsoleReporter(true))
 }

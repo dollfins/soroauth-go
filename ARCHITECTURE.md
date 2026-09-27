@@ -7,6 +7,11 @@ rules are protocol requirements rather than local choices.
 If you are here to pick up an issue, read [CONTRIBUTING.md](CONTRIBUTING.md)
 first for setup and the PR checklist. This file is the map.
 
+Every Markdown file here is link-checked by the
+[`links` workflow](.github/workflows/links.yml): internal links (between files
+in this repository) gate a PR, external links are reported on the weekly
+scheduled run and never block one.
+
 ## The problem
 
 When a Soroban contract calls `require_auth()` on an address that is **not** the

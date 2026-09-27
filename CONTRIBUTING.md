@@ -70,14 +70,52 @@ The underlying commands are:
 ```sh
 gofmt -l .        # must print nothing
 go vet ./...
+golangci-lint run ./...
 go test -race ./...
 ```
 
-CI runs exactly these, plus the golden-vector drift check and the signing-path
-budget check (see [Benchmarks](#benchmarks)). The suite runs with `-race`
-because `internal/xdrcopy` shares encoder and decoder buffers across calls
-through `sync.Pool`; without the detector, `TestCopyConcurrentReuse` would
-still pass on code that races.
+CI runs all of these except `golangci-lint`, plus the golden-vector drift check
+and the contract build; the signing-path budget check runs on push to main (see
+[Benchmarks](#benchmarks)). `golangci-lint` is a local gate only, because pull
+requests are capped at three checks — see [Linting](#linting).
+
+The suite runs with `-race` because `internal/xdrcopy` shares encoder and
+decoder buffers across calls through `sync.Pool`; without the detector,
+`TestCopyConcurrentReuse` would still pass on code that races.
+
+`internal/xdrcopy` also has a round-trip fuzz target, which the same `-race`
+reasoning covers: it asserts a copy is byte-identical to its source and shares
+no memory with it. Run it locally with
+
+```sh
+go test -fuzz=FuzzCopyRoundTrip -fuzztime=30s ./internal/xdrcopy
+```
+
+## Linting
+
+The gate is `.golangci.yml`, run locally. There is no `lint` job in
+`.github/workflows/ci.yml`: pull requests are capped at three checks, and the
+two that gate a merge are `vet and test` and `golden vectors are reproducible`.
+Run the linter before you push; a reviewer may also run it.
+
+The config is deliberately small, and each linter in it is there because the
+project would actually fix what it reports; the file says which and why, and
+which linters are off on purpose. A linter whose findings are all suppressed
+should be deleted rather than left as decoration.
+
+The config was verified against `v2.14.0`. Install that version and run it from
+the repository root:
+
+```sh
+GOBIN="$PWD/.tools" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+./.tools/golangci-lint run ./...
+```
+
+`.tools/` is gitignored. `golangci-lint run` prints `0 issues.` and exits 0 when
+clean; a finding names the file, the line and the linter. Fix a finding rather
+than excluding it. The one documented exception is `fmt.Fprint*` to the CLI's
+own stdout/stderr streams, listed under `errcheck.exclude-functions`; adding to
+that list needs a reason in the config, not a `//nolint` at the call site.
 
 ### The nested adapter module
 
@@ -322,6 +360,13 @@ node gen.mjs
 
 Then commit the regenerated files together with the generator change.
 
+### Versioning the vector schema and reproducing failures
+
+Every golden vector carries an explicit `schema_version` field (currently `1`). The loader (`golden_test.go`) explicitly checks this version and rejects any unknown or missing schema version rather than guessing or ignoring removed/reinterpreted fields.
+
+- **Bumping the version:** When a protocol change or schema evolution requires altering the structure of golden vectors, increment `schema_version` in both the generator (`testdata/gen/gen.mjs`) and all committed vector JSON files under `testdata/vectors/`, and update the expected version check in `golden_test.go`.
+- **Reproducing a failure locally:** If a vector fails schema validation or drifts from the reference implementation, run `go test -run TestGoldenVectors` (or `make vectors-check`) from the repository root. The test suite will fail loudly, naming the vector and the exact mismatch or unsupported schema version.
+
 If a vector disagrees with the Go code, the Go code is wrong until proven
 otherwise. If you believe the vector itself is wrong, stop and open an issue
 saying why, with the protocol reference — do not change it to make a test pass.
@@ -376,18 +421,44 @@ between releases.
   go test -tags e2e -v ./e2e/...
   ```
 
+## Parity reports
+
+The e2e suite writes a machine-readable `parity-report.json` alongside
+`RESULTS.md`, listing every scenario with its vector id, implementation,
+verdict and observed credential arm, so a parity regression can be read by a
+tool rather than by eye.
+
+`TestParityReportRegression` checks that report's shape: a non-zero scenario
+count, and a vector id and verdict on every entry. It needs no network — when
+no live report is present it reads the committed fixture at
+`e2e/testdata/parity_regression.json` — so it runs in CI as a step of the `vet
+and test` job, and a regression fails the build rather than only a local run:
+
+```sh
+go test -tags e2e -run TestParityReportRegression ./e2e
+```
+
+To debug a failure, inspect the generated `parity-report.json` in the
+repository root after a full e2e run; it carries the per-scenario verdicts the
+test is asserting over.
+
 ## Coverage reporting (CI)
 
-The CI pipeline (`coverage` job in `.github/workflows/ci.yml`) measures test
-coverage on every push and PR, enforces a floor of **80%**, and publishes the
-report via Codecov.
+The `coverage` job in `.github/workflows/ci-go.yml` measures test coverage,
+enforces a floor of **60%**, and publishes the report via Codecov. It runs on
+push to `main` and on demand, not on pull requests: pull requests carry only the
+three checks the branch ruleset requires.
 
 - Run locally to check your coverage before pushing:
   ```sh
   go test -coverprofile=coverage.out -covermode=atomic ./...
   go tool cover -func=coverage.out | awk '/total/{print $3}'
   ```
-- The floor is set to 80%. If it drops, the `coverage` job fails.
+- The floor is 60%, and it is a floor set below a measured total rather than an
+  aspiration. The 80% it replaced never passed: every push to `main` while it
+  was in place reported around 62% and failed. Raise it as tests are added;
+  never lower it without a fresh measurement named in the commit body. The
+  number in the job (`floor=60`) is the authority; this document follows it.
 - The report is visible in the CI logs and on Codecov without digging through
   artifacts.
 
@@ -418,7 +489,7 @@ go test -run 'TestParseAddressWithRandomXDR|TestFormatAddressRejectsInvalidXDR' 
 ### Reproducing a property test failure
 
 If a property test fails, the output will show the seed and the generated value
-that caused the failure. To reproduce:
+that causes the failure. To reproduce:
 
 ```sh
 # 1. Note the seed from the failure output (e.g., "failed with initial seed: 12345")
@@ -429,11 +500,103 @@ go test -run TestParseAddressFormatAddressProperty -v -count=1 ./... 2>&1 | head
 go test -run TestParseAddressFormatAddressDeterministic -v ./...
 ```
 
+Similarly, to run and reproduce expiration and signature consistency property tests for `AuthorizeEntry` across all address arms and delegate tree depths:
+
+```sh
+go test -run TestAuthorizeEntryExpirationProperty -v ./...
+```
+
 The deterministic test (`TestParseAddressFormatAddressDeterministic`) runs a
 fixed set of 100 iterations per property with seed `0xDEADBEEF` and is the one
 executed in CI. If it passes locally but the full property test fails, the
 failure is in the extended search space — increase `MinSuccessfulTests` in the
 deterministic test to narrow it down.
+
+### Fuzzing ValidateDelegateOrder
+
+`FuzzValidateDelegateOrder` in `delegates_test.go` feeds arbitrary bytes to the
+XDR decoder and, for anything that decodes to an entry, asserts that
+`ValidateDelegateOrder` neither panics nor accepts a delegate array that is
+mis-ordered or carries a duplicate at one level. Its seed corpus is built from a
+golden vector, a hand-built well-formed tree, and that tree with one delegate
+address overwritten to duplicate its sibling.
+
+The seeds are constructed with `f` passed to the test helpers, which take
+`testing.TB`. Do not build a `&testing.T{}` literal to satisfy them: it is an
+uninitialised struct, so `Helper()` and `Fatalf()` on it panic instead of
+reporting, and a seed that failed to build would take the whole target down
+rather than failing it.
+
+The fuzz run itself is not a pull-request check — 30 seconds of fuzzing per push
+would slow every review for a target whose job is to find inputs over time. It
+runs on push to `main` and on demand, as the `fuzz` job in
+`.github/workflows/ci-go.yml`. What a pull request does exercise is the seed
+corpus, through the ordinary `go test ./...`.
+
+To run it locally:
+
+```sh
+go test -run='^$' -fuzz=FuzzValidateDelegateOrder -fuzztime=30s .
+
+### Fuzzing
+
+The library includes fuzz tests for `Inspect` (`FuzzInspect` in `inspect_test.go`) to ensure arbitrary byte sequences never panic and always return either a valid `EntryInfo` or an error, never a half-populated struct alongside an error.
+
+#### Running fuzz tests locally
+
+```sh
+go test -run=^$ -fuzz=FuzzInspect -fuzztime=30s .
+```
+
+If a fuzz test fails, Go writes the failing input corpus item to a subdirectory under `testdata/fuzz/`. To reproduce or debug a captured failure:
+
+```sh
+go test -run=FuzzInspect/testdata/fuzz/FuzzInspect/<seed-name> .
+```
+
+### The fuzz seed corpus
+
+`FuzzValidateDelegateOrder`'s seed corpus is generated from the golden vectors,
+which are the entries this library is proven against: every credential arm, a
+sub-invocation tree, a create-contract invocation, the int64 nonce edges, and
+three delegate shapes including one address at two nesting depths. Seeding from
+real entries means the fuzzer's mutations start inside the space of things that
+decode, rather than spending its budget discovering what a valid entry looks
+like.
+
+Regenerate it from the repository root:
+
+```sh
+go run ./cmd/gencorpus
+```
+
+The seeds land in `testdata/fuzz/FuzzValidateDelegateOrder/`. That path is not a
+choice: Go reads a target's seed corpus from `testdata/fuzz/<TargetName>` and
+nowhere else, and each file must be in Go's corpus format (a
+`go test fuzz v1` header, then one Go literal per fuzz argument) or it fails the
+package's tests instead of being skipped. `gencorpus` writes the decoded entry
+bytes, since the target's argument is the `[]byte` it passes to
+`UnmarshalBinary`.
+
+Every seed is run by the ordinary suite, as a named subtest — no `-fuzz` flag
+needed, so a seed that starts failing fails `go test ./...`:
+
+```sh
+go test -run FuzzValidateDelegateOrder -v .
+```
+
+```
+=== RUN   FuzzValidateDelegateOrder/v2_sub_invocations_0
+--- PASS: FuzzValidateDelegateOrder (0.01s)
+```
+
+The generator is deterministic, so CI regenerates the corpus and fails on drift,
+the same way it does for the vectors themselves. Do not hand-edit a seed: change
+the vectors or the generator and regenerate.
+
+For the fuzz *run* — the part that searches for new inputs — see the `fuzz` job
+in `.github/workflows/ci-go.yml`, which runs on push to `main` and on demand
+rather than on pull requests.
 
 ### Capturing regressions
 

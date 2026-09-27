@@ -101,35 +101,3 @@ func (l hookList) emit(ctx context.Context, e HookEvent) {
 		_ = h.Event(ctx, e) // errors from hooks are not propagated
 	}
 }
-
-// withTiming wraps a function call with timing and emits
-// the appropriate hook events.
-func (l hookList) withTiming(ctx context.Context, phase HookPhase, credType, target string, ledger uint32, fn func()) {
-	if !l.hasHooks() {
-		fn()
-		return
-	}
-	start := time.Now()
-	fn()
-	elapsed := time.Since(start)
-	l.emit(ctx, HookEvent{
-		Phase:            phase,
-		CredentialType:   credType,
-		TargetAddress:    target,
-		ValidUntilLedger: ledger,
-		Duration:         elapsed,
-	})
-}
-
-// emitSign is a convenience to emit a sign-phase event.
-func (l hookList) emitSign(ctx context.Context, credType, target string, ledger uint32, nodeCount, signedCount int, err error) {
-	l.emit(ctx, HookEvent{
-		Phase:            HookPhaseSign,
-		CredentialType:   credType,
-		TargetAddress:    target,
-		ValidUntilLedger: ledger,
-		NodeCount:        nodeCount,
-		SignedNodeCount:  signedCount,
-		Error:            err,
-	})
-}

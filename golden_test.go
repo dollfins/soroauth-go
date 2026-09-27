@@ -36,6 +36,7 @@ type vectorDelegate struct {
 
 // vector is one golden case, as written by testdata/gen/gen.mjs.
 type vector struct {
+	SchemaVersion     int              `json:"schema_version"`
 	Name              string           `json:"name"`
 	SDK               string           `json:"sdk"`
 	NetworkPassphrase string           `json:"network_passphrase"`
@@ -49,7 +50,7 @@ type vector struct {
 	SignedEntryXDR    string           `json:"signed_entry_xdr"`
 }
 
-func loadVectors(t *testing.T) []vector {
+func loadVectors(t testing.TB) []vector {
 	t.Helper()
 
 	paths, err := filepath.Glob(filepath.Join("testdata", "vectors", "*.json"))
@@ -75,6 +76,9 @@ func loadVectors(t *testing.T) []vector {
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&v); err != nil {
 			t.Fatalf("decoding %s: %v", path, err)
+		}
+		if v.SchemaVersion != 1 {
+			t.Fatalf("%s has unsupported schema version %d, want 1", path, v.SchemaVersion)
 		}
 		if v.Name == "" {
 			t.Fatalf("%s has no name", path)

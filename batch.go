@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/stellar/go-stellar-sdk/xdr"
 
@@ -210,7 +211,9 @@ func AuthorizeAll(
 
 	var config authorizeAllConfig
 	for _, opt := range opts {
-		opt(&config)
+		if opt != nil {
+			opt(&config)
+		}
 	}
 
 	usedPlans := make(map[string]bool, len(config.delegatePlans))
@@ -295,4 +298,126 @@ func AuthorizeAll(
 	}
 
 	return out, nil
+}
+
+// VerifyResult holds the outcome of verifying a single Soroban authorization entry in a batch.
+type VerifyResult struct {
+	// Index is the position of the entry in the input slice.
+	Index int
+	// Address is the address extracted from the entry's credentials, if parseable.
+	Address string
+	// Error is nil if the entry verification succeeded, or the error encountered.
+	Error error
+}
+
+// verifyConfig holds configuration options for batch verification.
+type verifyConfig struct {
+	concurrency int
+}
+
+// VerifyOption configures batch verification behavior.
+type VerifyOption func(*verifyConfig)
+
+// WithConcurrency sets the maximum number of concurrent goroutines used during batch verification.
+// If n <= 0, concurrency is unbounded (or defaults to runtime limits as appropriate).
+func WithConcurrency(n int) VerifyOption {
+	return func(c *verifyConfig) {
+		c.concurrency = n
+	}
+}
+
+// VerifyAll verifies a slice of Soroban authorization entries in one call, reporting per-entry verdicts.
+//
+// Unlike AuthorizeAll, a failure in one entry does not abort the rest: every entry is checked,
+// and each result contains its own index, address, and error status.
+// Concurrency is bounded and configurable via VerifyOption parameters (e.g. WithConcurrency).
+func VerifyAll(
+	ctx context.Context,
+	entries []xdr.SorobanAuthorizationEntry,
+	networkPassphrase string,
+	opts ...VerifyOption,
+) ([]VerifyResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("soroauth: verify all: %w", err)
+	}
+
+	cfg := verifyConfig{concurrency: 0}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	if len(entries) == 0 {
+		return []VerifyResult{}, nil
+	}
+
+	workerLimit := cfg.concurrency
+	if workerLimit <= 0 {
+		workerLimit = len(entries)
+	}
+	if workerLimit > len(entries) {
+		workerLimit = len(entries)
+	}
+
+	type job struct {
+		index int
+		entry xdr.SorobanAuthorizationEntry
+	}
+
+	jobs := make(chan job, len(entries))
+	for i, entry := range entries {
+		jobs <- job{index: i, entry: entry}
+	}
+	close(jobs)
+
+	results := make([]VerifyResult, len(entries))
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for w := 0; w < workerLimit; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				res := VerifyResult{Index: j.index}
+				local := j.entry
+				if local.Credentials.Type == xdr.SorobanCredentialsTypeSorobanCredentialsSourceAccount {
+					mu.Lock()
+					results[j.index] = res
+					mu.Unlock()
+					continue
+				}
+
+				credentials, err := addressCredentials(local.Credentials)
+				if err != nil {
+					res.Error = err
+					mu.Lock()
+					results[j.index] = res
+					mu.Unlock()
+					continue
+				}
+				addrStr, err := FormatAddress(credentials.Address)
+				if err == nil {
+					res.Address = addrStr
+				}
+
+				rep, err := VerifyEntry(local, networkPassphrase)
+				if err == nil && !rep.Verified() {
+					for _, n := range rep.Nodes {
+						if n.Verdict != VerdictVerified && n.Verdict != VerdictUnsigned {
+							err = fmt.Errorf("node %s verdict %s: %s", n.Address, n.Verdict, n.Reason)
+							break
+						}
+					}
+				}
+				res.Error = err
+				mu.Lock()
+				results[j.index] = res
+				mu.Unlock()
+			}
+		}()
+	}
+
+	wg.Wait()
+	return results, nil
 }

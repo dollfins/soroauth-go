@@ -168,6 +168,28 @@ func (h *harness) deployThresholdAccount(
 	return h.deployFixture(t, deployer, "threshold_account", []xdr.ScVal{scAddressVecVal(t, signers), scU32Val(threshold)})
 }
 
+// deployPolicyAccount uploads the policy-account fixture and instantiates it
+// with the given delegate signer set, per-period spending limit, and period
+// length in ledgers.
+//
+// The constructor's argument order is (signers, limit, period_ledgers), and the
+// limit is an i128 because that is the type the SAC transfer amount it is
+// compared against uses.
+func (h *harness) deployPolicyAccount(
+	t *testing.T,
+	deployer *keypair.Full,
+	signers []string,
+	limit int64,
+	periodLedgers uint32,
+) deployment {
+	t.Helper()
+	return h.deployFixture(t, deployer, "policy_account", []xdr.ScVal{
+		scAddressVecVal(t, signers),
+		i128(limit),
+		scU32Val(periodLedgers),
+	})
+}
+
 // scSymbolVal wraps a symbol as an ScVal, the type an ScMap's keys must use.
 func scSymbolVal(symbol string) xdr.ScVal {
 	value := xdr.ScSymbol(symbol)

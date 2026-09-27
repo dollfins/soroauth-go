@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "name": "legacy_single_testnet",
   "sdk": "@stellar/stellar-sdk@17.1.0",
   "network_passphrase": "Test SDF Network ; September 2015",

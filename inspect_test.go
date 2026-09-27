@@ -10,6 +10,8 @@ import (
 
 	"github.com/stellar/go-stellar-sdk/network"
 	"github.com/stellar/go-stellar-sdk/xdr"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInspectReportsTheArm(t *testing.T) {
@@ -182,6 +184,71 @@ func TestInspectReportsCreateContractWithoutAFunction(t *testing.T) {
 	}
 }
 
+func TestInspectNodeInfoJSONGolden(t *testing.T) {
+	buf := make([]byte, 64)
+	shape := DescribeSignature(xdr.ScVal{
+		Type:  xdr.ScValTypeScvBytes,
+		Bytes: (*xdr.ScBytes)(&buf),
+	})
+	node := NodeInfo{
+		Address: "GBEXAMPLE",
+		Signed:  true,
+		Shape:   &shape,
+	}
+	data, err := json.Marshal(node)
+	if err != nil {
+		fn := t.Fatalf
+		fn("marshaling node info: %v", err)
+	}
+	// Verify JSON serialization includes the Shape field correctly and matches golden schema expectations
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshaling node info: %v", err)
+	}
+	if _, ok := m["shape"]; !ok {
+		t.Error("serialized NodeInfo json is missing 'shape' field")
+	}
+	if m["address"] != "GBEXAMPLE" {
+		t.Errorf("expected address GBEXAMPLE, got %v", m["address"])
+	}
+	if m["signed"] != true {
+		t.Errorf("expected signed true, got %v", m["signed"])
+	}
+	// Verify backwards compatibility of omitting Shape when nil
+	nilShapeNode := NodeInfo{
+		Address: "GBEXAMPLE",
+		Signed:  false,
+	}
+	dataNil, err := json.Marshal(nilShapeNode)
+	if err != nil {
+		t.Fatalf("marshaling node info with nil shape: %v", err)
+	}
+	var mNil map[string]any
+	if err := json.Unmarshal(dataNil, &mNil); err != nil {
+		t.Fatalf("unmarshaling node info with nil shape: %v", err)
+	}
+	if _, ok := mNil["shape"]; ok {
+		t.Error("serialized NodeInfo json should omit 'shape' field when nil for backwards compatibility")
+	}
+
+	// Test vector ScValTypeScvVec signature description explicitly
+	vecVal := xdr.ScVal{Type: xdr.ScValTypeScvVec}
+	vecShape := DescribeSignature(vecVal)
+	if vecShape.Type != SignatureShapeUnknown {
+		t.Errorf("vector shape type is %v, want %v", vecShape.Type, SignatureShapeUnknown)
+	}
+	if !strings.Contains(vecShape.Description, "vector structure signature") {
+		t.Errorf("vector shape description is %q, want it to mention vector structure signature", vecShape.Description)
+	}
+
+	// Test nil Bytes pointer safety
+	nilBytesVal := xdr.ScVal{Type: xdr.ScValTypeScvBytes, Bytes: nil}
+	nilBytesShape := DescribeSignature(nilBytesVal)
+	if nilBytesShape.Type != SignatureShapeUnknown {
+		t.Errorf("nil bytes shape type is %v, want %v", nilBytesShape.Type, SignatureShapeUnknown)
+	}
+}
+
 func TestInspectReportsTheDelegateTree(t *testing.T) {
 	base := entryForArm(t, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 42)
 	d1 := testKeypair(t, "soroauth-delegate-1").Address()
@@ -299,6 +366,37 @@ func TestInspectShowsMisorderedDelegates(t *testing.T) {
 	}
 }
 
+func TestDescribeSignatureVectorShape(t *testing.T) {
+	sig := xdr.ScVal{Type: xdr.ScValTypeScvVec}
+	shape := DescribeSignature(sig)
+	if shape.Type != SignatureShapeUnknown {
+		t.Errorf("got type %v, want %v", shape.Type, SignatureShapeUnknown)
+	}
+	if shape.Description != "vector structure signature" {
+		t.Errorf("got description %q, want %q", shape.Description, "vector structure signature")
+	}
+}
+
+func TestNodeInfoShapeSerializationGolden(t *testing.T) {
+	shape := SignatureShape{
+		Type:        SignatureShapePasskey,
+		Description: "64-byte binary passkey signature",
+	}
+	node := NodeInfo{
+		Address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+		Signed:  true,
+		Shape:   &shape,
+	}
+	data, err := json.Marshal(node)
+	if err != nil {
+		t.Fatalf("marshaling NodeInfo: %v", err)
+	}
+	expected := `{"address":"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF","signed":true,"shape":{"type":"passkey","description":"64-byte binary passkey signature"}}`
+	if string(data) != expected {
+		t.Errorf("NodeInfo JSON serialization mismatch:\n got: %s\nwant: %s", string(data), expected)
+	}
+}
+
 func TestInspectSerialisesToJSON(t *testing.T) {
 	base := entryForArm(t, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 42)
 	entry, err := WithDelegates(base, testValidUntilLedger,
@@ -388,4 +486,141 @@ func mustParse(t *testing.T, address string) xdr.ScAddress {
 		t.Fatalf("parsing %q: %v", address, err)
 	}
 	return parsed
+}
+
+func TestDescribeSignatureShapes(t *testing.T) {
+	// Void signature
+	shapeVoid := DescribeSignature(xdr.ScVal{Type: xdr.ScValTypeScvVoid})
+	assert.Equal(t, SignatureShapeUnknown, shapeVoid.Type)
+
+	// Vec signature
+	vec := &xdr.ScVec{}
+	shapeVec := DescribeSignature(xdr.ScVal{Type: xdr.ScValTypeScvVec, Vec: &vec})
+	assert.Equal(t, SignatureShapeUnknown, shapeVec.Type)
+
+	// Map signature
+	m := &xdr.ScMap{}
+	shapeMap := DescribeSignature(xdr.ScVal{Type: xdr.ScValTypeScvMap, Map: &m})
+	assert.Equal(t, SignatureShapeMap, shapeMap.Type)
+
+	// Bytes signature
+	b := xdr.ScBytes([]byte{1, 2, 3})
+	shapeBytes := DescribeSignature(xdr.ScVal{Type: xdr.ScValTypeScvBytes, Bytes: &b})
+	assert.Equal(t, SignatureShapeUnknown, shapeBytes.Type)
+}
+
+// TestInspectEmptyUnionArms covers the empty-union-arm cases the fuzz target
+// cannot reach.
+//
+// A successfully decoded entry always has its union arm allocated — the XDR
+// decoder allocates the arm the discriminant names — so no byte string fed to
+// FuzzInspect produces a nil arm. The reachable path is a caller handing Inspect
+// a hand-built struct whose discriminant and arm disagree, which is what this
+// asserts directly: an error naming which arm was empty, and a zero EntryInfo
+// alongside it, never a half-populated one.
+func TestInspectEmptyUnionArms(t *testing.T) {
+	tests := []struct {
+		name    string
+		entry   xdr.SorobanAuthorizationEntry
+		wantErr string
+	}{
+		{
+			name: "legacy address arm",
+			entry: xdr.SorobanAuthorizationEntry{
+				Credentials: xdr.SorobanCredentials{
+					Type: xdr.SorobanCredentialsTypeSorobanCredentialsAddress,
+				},
+			},
+			wantErr: "address credentials arm is empty",
+		},
+		{
+			name: "v2 arm",
+			entry: xdr.SorobanAuthorizationEntry{
+				Credentials: xdr.SorobanCredentials{
+					Type: xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2,
+				},
+			},
+			wantErr: "address_v2 credentials arm is empty",
+		},
+		{
+			name: "delegates arm",
+			entry: xdr.SorobanAuthorizationEntry{
+				Credentials: xdr.SorobanCredentials{
+					Type: xdr.SorobanCredentialsTypeSorobanCredentialsAddressWithDelegates,
+				},
+			},
+			wantErr: "address_with_delegates credentials arm is empty",
+		},
+		{
+			name: "contract_fn invocation arm",
+			entry: xdr.SorobanAuthorizationEntry{
+				Credentials: xdr.SorobanCredentials{
+					Type: xdr.SorobanCredentialsTypeSorobanCredentialsSourceAccount,
+				},
+				RootInvocation: xdr.SorobanAuthorizedInvocation{
+					Function: xdr.SorobanAuthorizedFunction{
+						Type: xdr.SorobanAuthorizedFunctionTypeSorobanAuthorizedFunctionTypeContractFn,
+					},
+				},
+			},
+			wantErr: "contract_fn invocation arm is empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := Inspect(tt.entry)
+
+			require.Error(t, err, "an empty union arm must be an error, not a partial report")
+			assert.Contains(t, err.Error(), tt.wantErr,
+				"the error must name which arm was empty")
+			assert.Equal(t, EntryInfo{}, info,
+				"Inspect must not return a populated EntryInfo alongside an error")
+		})
+	}
+}
+
+func FuzzInspect(f *testing.F) {
+	// f is passed to the helpers directly, which take testing.TB. A
+	// &testing.T{} literal would be an uninitialised struct: Helper() and
+	// Fatalf() on one panic rather than reporting, so a seed that failed to
+	// build would take the target down instead of failing it.
+	for _, vec := range loadVectors(f) {
+		var entry xdr.SorobanAuthorizationEntry
+		if err := xdr.SafeUnmarshalBase64(vec.UnsignedEntryXDR, &entry); err == nil {
+			raw, err := entry.MarshalBinary()
+			if err == nil {
+				f.Add(raw)
+			}
+		}
+	}
+
+	baseSeed := entryForArm(f, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 42)
+	if raw, err := baseSeed.MarshalBinary(); err == nil {
+		f.Add(raw)
+	}
+
+	// Truncations of a real entry. Each one either fails to decode — which the
+	// target returns on — or decodes to something structurally short of what
+	// Inspect expects, which is the shape worth reaching. Seeding these is what
+	// makes the fuzzer start near the boundary instead of finding it by luck.
+	if raw, err := baseSeed.MarshalBinary(); err == nil {
+		for _, n := range []int{0, 1, 4, 8, len(raw) / 4, len(raw) / 2, len(raw) - 1} {
+			if n >= 0 && n <= len(raw) {
+				f.Add(raw[:n])
+			}
+		}
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var entry xdr.SorobanAuthorizationEntry
+		if err := entry.UnmarshalBinary(data); err != nil {
+			return
+		}
+		info, err := Inspect(entry)
+		if err != nil {
+			if !reflect.DeepEqual(info, EntryInfo{}) {
+				t.Errorf("Inspect returned a non-empty EntryInfo alongside an error: %+v, err: %v", info, err)
+			}
+		}
+	})
 }

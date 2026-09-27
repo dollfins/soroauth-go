@@ -116,6 +116,7 @@ starting points.
   own ledger window. Scenarios F and G.
 - **`contracts/threshold-account`** requires M of its N registered signers before
   it authenticates anything. Scenarios H and I.
+- **`contracts/policy-account`** enforces per-period spending limits by inspecting invocation arguments within `__check_auth`.
 
 Each has its own unit tests: `cargo test -p modular-account`,
 `cargo test -p session-keys`, `cargo test -p threshold-account`.

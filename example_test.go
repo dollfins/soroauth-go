@@ -7,8 +7,68 @@ import (
 	"time"
 
 	"github.com/stellar/go-stellar-sdk/keypair"
+	"github.com/stellar/go-stellar-sdk/network"
 	"github.com/stellar/go-stellar-sdk/xdr"
 )
+
+// ExampleParseAddress shows the two address forms an address credential may
+// name, the canonicality rule, and the muxed-address refusal.
+//
+// Only the canonical SEP-23 base32 spelling is accepted, so a lower-cased (or
+// padded, or whitespace-wrapped) address is refused even though it names the
+// same key; an M… muxed address is refused rather than unwrapped, because a
+// credential must name the account itself (CAP-46-11).
+func ExampleParseAddress() {
+	account, err := ParseAddress("GAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB7JZX")
+	if err != nil {
+		fmt.Println("account:", err)
+		return
+	}
+	contract, err := ParseAddress("CAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB6N4O")
+	if err != nil {
+		fmt.Println("contract:", err)
+		return
+	}
+	fmt.Println(account.Type == xdr.ScAddressTypeScAddressTypeAccount)
+	fmt.Println(contract.Type == xdr.ScAddressTypeScAddressTypeContract)
+
+	// Non-canonical spellings are refused, even though they name the same key.
+	if _, err := ParseAddress("gaaacaqdaqcqmbyibefawdanbyhraeiscmkbkfqxdamrugy4dupb7jzx"); err != nil {
+		fmt.Println("lower-cased refused")
+	}
+
+	// A muxed address is refused rather than unwrapped: a credential must name
+	// the account itself.
+	if _, err := ParseAddress("MAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB6AAAAAAAAAAE2KZ3Q"); err != nil {
+		fmt.Println("muxed refused")
+	}
+
+	// Output:
+	// true
+	// true
+	// lower-cased refused
+	// muxed refused
+}
+
+// ExampleFormatAddress is the inverse of ParseAddress: it renders each accepted
+// address form and refuses the same arms ParseAddress refuses, so a caller is
+// never shown an address this library would decline to sign for.
+func ExampleFormatAddress() {
+	address, err := ParseAddress("CAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB6N4O")
+	if err != nil {
+		fmt.Println("parse:", err)
+		return
+	}
+	formatted, err := FormatAddress(address)
+	if err != nil {
+		fmt.Println("format:", err)
+		return
+	}
+	fmt.Println(formatted)
+
+	// Output:
+	// CAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB6N4O
+}
 
 // ExampleDecodeAuthorizationEntry shows the entry point for a base64 entry that
 // came from somewhere else. The limits it applies are documented on the
@@ -97,6 +157,45 @@ func ExampleNewPasskeySigner() {
 	fmt.Printf("signer address: %s\n", signer.Address())
 
 	// Output: signer address: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF
+}
+
+// ExampleVerifyAll shows how to verify a batch of authorization entries
+// concurrently with custom configuration and per-entry reporting.
+func ExampleVerifyAll() {
+	entry := xdr.SorobanAuthorizationEntry{
+		Credentials: xdr.SorobanCredentials{
+			Type: xdr.SorobanCredentialsTypeSorobanCredentialsSourceAccount,
+		},
+	}
+
+	results, err := VerifyAll(context.Background(), []xdr.SorobanAuthorizationEntry{entry}, network.TestNetworkPassphrase, WithConcurrency(2))
+	if err != nil {
+		fmt.Println("verify error:", err)
+		return
+	}
+
+	for _, res := range results {
+		fmt.Printf("entry %d address=%q err=%v\n", res.Index, res.Address, res.Error)
+		break
+	}
+
+	// Output: entry 0 address="" err=<nil>
+}
+
+// ExampleDescribeSignature shows how to use DescribeSignature to inspect
+// an unknown or custom signature shape.
+func ExampleDescribeSignature() {
+	// A sample passkey signature shape (64 bytes)
+	bytesVal := make([]byte, 64)
+	sig := xdr.ScVal{
+		Type:  xdr.ScValTypeScvBytes,
+		Bytes: (*xdr.ScBytes)(&bytesVal),
+	}
+
+	shape := DescribeSignature(sig)
+	fmt.Printf("shape type: %s, description: %s\n", shape.Type, shape.Description)
+
+	// Output: shape type: passkey, description: 64-byte binary passkey signature
 }
 
 // ExampleSigner_cancellation shows how signers honour context cancellation

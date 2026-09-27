@@ -1,0 +1,18 @@
+[package]
+name = "policy-account"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91.0"
+publish = false
+license = "Apache-2.0"
+description = "Test fixture: a custom account enforcing per-period spending limits with CAP-71 delegates. Not a product."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = "=27.0.6"
+
+[dev-dependencies]
+soroban-sdk = { version = "=27.0.6", features = ["testutils"] }

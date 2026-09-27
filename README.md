@@ -38,6 +38,7 @@ make build        # build the CLI to bin/soroauth
 make vectors      # regenerate testdata/vectors from the pinned JS SDK
 make vectors-check # regenerate, then fail if the committed vectors changed
 make e2e          # build the test contract and run the live testnet suite
+make wasm-budget  # build the wasm core and fail if it is over its size ceiling
 ```
 
 Every target fails loudly: `make fmt` exits non-zero if any file is not
@@ -92,6 +93,10 @@ terminal program, not something a script drives, so it has no `--json` mode.
 ### Worked invocation — JSON output
 
 ```sh
+# Pipe subcommands together without intermediate shell variables:
+./soroauth delegates --entry <base64> --valid-until 1234567 --delegate GAAAA... --json |
+  ./soroauth sign --entry - --valid-until 1234567 --network testnet --secret-env SEED --json
+
 # What would this signer have to sign?
 SEED=SABC... ./soroauth payload \
   --entry <base64> --valid-until 1234567 --network testnet --json |
@@ -289,6 +294,47 @@ The scripts are generated from the same command/flag table the CLI parses, so
 a flag added to a subcommand without updating the completions spec fails the
 test suite (`TestSpecsMatchTheRealFlagSets`) rather than shipping a completion
 script that silently omits it.
+
+### Wasm budget — fail the build when the wasm core outgrows its ceiling
+
+`soroauth wasm-budget` measures the compiled js/wasm signing core and exits
+non-zero if it is larger than its budget. The core is downloaded by a browser,
+so its size is worth failing on rather than noticing after a release.
+
+```sh
+# Measure the built artifact against the default 7 MiB ceiling.
+soroauth wasm-budget --out wasm/dist/soroauth.wasm
+
+# Build and measure in one step, with a budget of your own.
+soroauth wasm-budget --build-cmd ./wasm/build.sh --budget 6500000
+
+# Report the delta against the last release's size.
+soroauth wasm-budget --prev-size 6204087
+
+# Machine-readable, for CI.
+soroauth wasm-budget --json
+```
+
+```json
+{
+  "size": 6211959,
+  "budget": 7340032,
+  "exceeded": false,
+  "previous_size": 6204087,
+  "delta": 7872
+}
+```
+
+The default budget is 7 MiB (7340032 bytes), a ceiling set above the size the
+build actually produces (6211959 bytes, measured with go1.25.4 on darwin/arm64)
+rather than an aspiration. A binary exactly at the budget passes; only one
+strictly larger fails. `--prev-size` is optional, and a
+negative `delta` means the artifact shrank.
+
+Stdout carries only the result, on the over-budget path too — the diagnostic
+goes to stderr — so `soroauth wasm-budget --json | jq .exceeded` works whether
+the build passed or failed. `make wasm-budget` runs it against
+`wasm/dist/soroauth.wasm` after building both the CLI and the core.
 
 ### Release workflow
 
@@ -722,6 +768,10 @@ outside its author. Read the code before you sign anything valuable with it.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Golden vectors are never edited by hand.
 Security reports go through [SECURITY.md](SECURITY.md), not the issue tracker.
+
+The Markdown in this repository is link-checked by the
+[`links` workflow](.github/workflows/links.yml): internal links gate a PR,
+external links are reported on the weekly scheduled run.
 
 ## License
 

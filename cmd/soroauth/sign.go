@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/stellar/go-stellar-sdk/keypair"
 	"github.com/stellar/go-stellar-sdk/xdr"
@@ -17,8 +18,24 @@ import (
 const signUsage = `soroauth sign — sign an authorization entry.
 
 usage:
-  soroauth sign --entry <base64> --valid-until <ledger> --network <name|passphrase> \
-                --secret-env <VAR> [--for <address>] [--json]
+  soroauth sign --entry <base64|-> (--valid-until <ledger> | --valid-for <ledgers>) \
+                --network <name|passphrase> \
+                (--secret-env <VAR> | --assertion <file|->) \
+                [--rpc-url <url>] [--for <address>] [--json]
+
+Give exactly one of --valid-until (an absolute ledger) or --valid-for (a
+lifetime in ledgers, added to the current ledger). --valid-for needs an RPC
+endpoint, taken from --rpc-url or, if that is unset, $SOROAUTH_RPC_URL; it is
+refused when neither names one, because guessing a network here would sign an
+expiration bound to the wrong chain.
+
+Give exactly one of --secret-env (the name of an environment variable holding an
+S… seed) or --assertion (a WebAuthn assertion, from a file or - for stdin).
+
+Subcommands support reading entries from stdin using --entry - so commands compose in pipelines:
+
+  soroauth delegates --entry entry.b64 --valid-until 1234567 --delegate GABC... | \
+    soroauth sign --entry - --valid-until 1234567 --network testnet --secret-env SEED --for GABC...
 
 --entry accepts either an authorization entry or a whole transaction envelope,
 and the tool works out which it was given. Given an envelope it signs every
@@ -33,9 +50,11 @@ resource fees. This command signs entries only — it does not simulate, and it
 does not sign the envelope itself, which is the source account's (or the
 fee-bump fee source's) signature, not an authorization entry.
 
-The signing seed is read from the environment variable named by --secret-env.
-There is deliberately no flag that takes a seed as a value: a flag value ends up
-in shell history, in the process table, and in any transcript of the session.
+The signing seed is read from the environment variable named by --secret-env,
+or a WebAuthn assertion JSON is read from a file or stdin via --assertion.
+There is deliberately no flag that takes a seed or private key as a literal value:
+flag values end up in shell history, in the process table, and in any transcript
+of the session.
 
 The signature is written only onto credential nodes whose address matches the
 signer's own address, or the address given by --for. If no node matches, the
@@ -56,6 +75,10 @@ type signOutput struct {
 }
 
 func runSign(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
+	return runSignWithStdin(args, stdout, stderr, getenv, os.Stdin)
+}
+
+func runSignWithStdin(args []string, stdout, stderr io.Writer, getenv func(string) string, stdin io.Reader) error {
 	flags := flag.NewFlagSet("sign", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -64,10 +87,13 @@ func runSign(args []string, stdout, stderr io.Writer, getenv func(string) string
 		flags.PrintDefaults()
 	}
 
-	entryFlag := flags.String("entry", "", "the authorization entry or transaction envelope, as base64 XDR")
+	entryFlag := flags.String("entry", "", "the authorization entry or transaction envelope, as base64 XDR or -")
 	validUntil := flags.Uint("valid-until", 0, "the last ledger at which the signature is valid")
+	validFor := flags.Uint64("valid-for", 0, "the signature lifetime in ledgers, resolved against the current ledger (needs --rpc-url)")
+	rpcURL := flags.String("rpc-url", "", "RPC endpoint used to resolve --valid-for (default $SOROAUTH_RPC_URL)")
 	networkFlag := flags.String("network", "", "testnet, public, or a literal network passphrase")
-	secretEnv := flags.String("secret-env", "", "name of the environment variable holding the S… seed")
+	secretEnv := flags.String("secret-env", "", "name of the environment variable holding the signing seed (S…)")
+	assertionFlag := flags.String("assertion", "", "path to a WebAuthn assertion JSON file, or - for stdin")
 	forAddress := flags.String("for", "", "credential node to sign, when it is not the signer's own address")
 	jsonFlag := flags.Bool("json", false, "output as JSON")
 
@@ -75,7 +101,12 @@ func runSign(args []string, stdout, stderr io.Writer, getenv func(string) string
 		return newErrorf(ExitUsageError, "%w", err)
 	}
 
-	input, err := decodeEntryOrEnvelope(*entryFlag)
+	resolvedEntry, err := resolveEntryArg(*entryFlag, stdin)
+	if err != nil {
+		return writeJSONError(stdout, *jsonFlag, err)
+	}
+
+	input, err := decodeEntryOrEnvelope(resolvedEntry)
 	if err != nil {
 		return writeJSONError(stdout, *jsonFlag, err)
 	}
@@ -83,29 +114,34 @@ func runSign(args []string, stdout, stderr io.Writer, getenv func(string) string
 	if err != nil {
 		return writeJSONError(stdout, *jsonFlag, err)
 	}
-	if *validUntil == 0 {
-		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "--valid-until is required and must be greater than zero"))
-	}
-	if *secretEnv == "" {
-		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "--secret-env is required: name the environment variable holding the seed"))
-	}
-
-	seed := getenv(*secretEnv)
-	if seed == "" {
-		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "environment variable %s is empty or unset", *secretEnv))
-	}
-
-	// keypair.Parse's error can quote what it was given, so it is deliberately
-	// not wrapped: the message names the variable, never its contents.
-	parsed, err := keypair.Parse(seed)
+	expiration, err := resolveValidUntil(context.Background(), uint64(*validUntil), *validFor, resolveRPCURL(*rpcURL, getenv), fetchLatestLedger)
 	if err != nil {
-		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "the value of %s is not a valid Stellar key", *secretEnv))
+		return writeJSONError(stdout, *jsonFlag, err)
 	}
-	full, ok := parsed.(*keypair.Full)
-	if !ok {
-		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "the value of %s is a public key; a secret seed (S…) is required", *secretEnv))
+	if (*secretEnv == "" && *assertionFlag == "") || (*secretEnv != "" && *assertionFlag != "") {
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "--secret-env is required unless --assertion is given: exactly one of --secret-env or --assertion must be provided"))
 	}
-	signer := soroauth.NewEd25519Signer(full)
+
+	var signer soroauth.Signer
+	if *secretEnv != "" {
+		seed := getenv(*secretEnv)
+		if seed == "" {
+			return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "environment variable %s is empty or unset", *secretEnv))
+		}
+
+		parsed, err := keypair.Parse(seed)
+		if err != nil {
+			return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "the value of %s is not a valid Stellar key", *secretEnv))
+		}
+		full, ok := parsed.(*keypair.Full)
+		if !ok {
+			return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "the value of %s is a public key; a secret seed (S…) is required", *secretEnv))
+		}
+		signer = soroauth.NewEd25519Signer(full)
+	} else {
+		// Passkey support not implemented in current library version.
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "passkey authentication is not yet supported"))
+	}
 
 	// An envelope carries entries for whatever addresses simulation recorded,
 	// so a single target address would be ambiguous: it would have to apply to
@@ -117,7 +153,7 @@ func runSign(args []string, stdout, stderr io.Writer, getenv func(string) string
 
 	if input.IsEnvelope {
 		signed, err := soroauth.AuthorizeEnvelope(context.Background(), input.Envelope,
-			[]soroauth.Signer{signer}, uint32(*validUntil), passphrase)
+			[]soroauth.Signer{signer}, expiration, passphrase)
 		if err != nil {
 			return writeJSONError(stdout, *jsonFlag, newErrorf(exitCodeForSigningError(err), "%w", err))
 		}
@@ -141,7 +177,7 @@ func runSign(args []string, stdout, stderr io.Writer, getenv func(string) string
 	}
 
 	signed, err := soroauth.AuthorizeEntry(context.Background(), input.Entry,
-		signer, uint32(*validUntil), passphrase, opts...)
+		signer, expiration, passphrase, opts...)
 	if err != nil {
 		return writeJSONError(stdout, *jsonFlag, newErrorf(exitCodeForSigningError(err), "%w", err))
 	}

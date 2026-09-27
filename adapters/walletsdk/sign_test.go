@@ -3,12 +3,10 @@ package walletsdk
 import (
 	"context"
 	"errors"
+	"github.com/soroauth/soroauth-go"
+	"github.com/stellar/go-stellar-sdk/xdr"
 	"strings"
 	"testing"
-
-	"github.com/stellar/go-stellar-sdk/xdr"
-
-	"github.com/soroauth/soroauth-go"
 )
 
 // signOnce runs the ordinary wallet flow — sign, record the enforce pass, take

@@ -236,6 +236,7 @@ jobs:
             artifacts/soroauth-darwin-amd64/soroauth
             artifacts/soroauth-darwin-arm64/soroauth
             artifacts/soroauth-windows-amd64/soroauth.exe
+            parity-report.json
           body_path: release_notes.md
           draft: false
           prerelease: false

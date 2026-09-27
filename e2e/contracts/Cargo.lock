@@ -1204,6 +1204,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "policy-account"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1531,13 +1538,6 @@ name = "smallvec"
 version = "1.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
-
-[[package]]
-name = "social-recovery"
-version = "0.1.0"
-dependencies = [
- "soroban-sdk",
-]
 
 [[package]]
 name = "soroban-builtin-sdk-macros"

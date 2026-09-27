@@ -225,7 +225,20 @@ func TestTUISpecMatchesItsUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tui -h failed: %v", err)
 	}
-	for _, f := range commandSpecs[5].Flags {
+	// Looked up by name, not by index. This was commandSpecs[5], which silently
+	// started checking a different subcommand's flags against tui's usage text
+	// the moment a spec was inserted above it.
+	var tui *commandSpec
+	for i := range commandSpecs {
+		if commandSpecs[i].Name == "tui" {
+			tui = &commandSpecs[i]
+			break
+		}
+	}
+	if tui == nil {
+		t.Fatal("no tui entry in commandSpecs")
+	}
+	for _, f := range tui.Flags {
 		if !strings.Contains(stdout, "--"+f.Name) {
 			t.Errorf("tui usage text does not mention --%s", f.Name)
 		}

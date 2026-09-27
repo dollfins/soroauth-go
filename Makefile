@@ -14,7 +14,7 @@ NODE ?= node
 BIN_DIR := bin
 BIN     := $(BIN_DIR)/soroauth
 
-.PHONY: all help fmt vet test build vectors vectors-check e2e clean parity parity-rust wasm wasm-check ts-test
+.PHONY: all help fmt vet test build vectors vectors-check e2e clean parity parity-rust wasm wasm-check wasm-budget ts-test
 
 # The default target runs exactly what a pull request has to pass before the
 # golden-vector drift check, which needs Node and the network.
@@ -34,6 +34,7 @@ help:
 	@echo "  make parity-rust   run the Rust stellar-xdr parity harness"
 	@echo "  make wasm          build the js/wasm signing core into wasm/dist/"
 	@echo "  make wasm-check    build the wasm core and prove it matches the golden vectors"
+	@echo "  make wasm-budget   build the wasm core and fail if it is over its size ceiling"
 	@echo "  make ts-test       typecheck and test the TypeScript wrapper package"
 	@echo "  make clean         remove $(BIN_DIR)/ and build output"
 
@@ -116,6 +117,12 @@ wasm-check: wasm
 
 ts-test: wasm
 	cd wasm/ts && $(NPM) ci && $(NPM) run typecheck && $(NPM) test
+
+# Builds the module and measures it against the 3 MiB ceiling, failing if it is
+# over. The core is downloaded by a browser, so its size is a property worth
+# failing on rather than noticing later.
+wasm-budget: build wasm
+	$(BIN_DIR)/soroauth wasm-budget --out wasm/dist/soroauth.wasm
 
 clean:
 	rm -rf $(BIN_DIR) wasm/dist wasm/ts/dist wasm/ts/node_modules .venv-parity

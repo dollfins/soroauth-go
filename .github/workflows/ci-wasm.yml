@@ -41,6 +41,15 @@ jobs:
       # a step of its own rather than folded into `go test`.
       - name: build the wasm module
         run: ./wasm/build.sh
+      # A step of the existing job, not a job of its own: another job would be
+      # another row, and the pull-request check count is capped at three. The
+      # size is enforced right after the build that produced it, before the
+      # slower parity and TypeScript steps, so a core that outgrew its ceiling
+      # fails fast and says so by how much.
+      - name: wasm size budget
+        run: |
+          go build -o bin/soroauth ./cmd/soroauth
+          ./bin/soroauth wasm-budget --out wasm/dist/soroauth.wasm --json
       - name: wasm byte parity against the golden vectors
         run: node wasm/parity.mjs
       - name: typescript wrapper

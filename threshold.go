@@ -50,7 +50,6 @@ type ThresholdSigner interface {
 // ceremony.
 type thresholdSession struct {
 	round     int64
-	threshold int
 	shares    map[string][]byte
 	signers   []string
 	complete  bool

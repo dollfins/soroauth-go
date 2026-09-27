@@ -97,7 +97,8 @@ func PasskeyParse(payload [32]byte, assertionJSON []byte) (authData, signedBytes
 // caller already has stand in as parameters: the credential public key stored
 // at registration, the decoded assertion pieces from PasskeyParse, and the
 // assertion signature's raw (r, s) halves — DER parsing is deliberately out of
-// scope here and tracked as issue #25.
+// scope here; parse it at the WebAuthn boundary before using the P-256
+// primitives below.
 func PasskeySignExample(
 	ctx context.Context,
 	entry xdr.SorobanAuthorizationEntry,
@@ -127,9 +128,12 @@ func PasskeySignExample(
 	// unsorted ScMap as Error(Object, InvalidInput) (rs-soroban-env issue
 	// #1510 records how opaque that failure is) — so a hand-rolled shape
 	// fails there, on-chain, rather than here.
-	pubRaw := pub.X.Bytes()
+	pubRaw := elliptic.Marshal(elliptic.P256(), pub.X, pub.Y)
 	pubVal := xdr.ScBytes(pubRaw)
-	sigVal := xdr.ScBytes(sigR[:])
+	signature := make([]byte, soroauth.Secp256r1SignatureSize)
+	r.FillBytes(signature[:32])
+	s.FillBytes(signature[32:])
+	sigVal := xdr.ScBytes(signature)
 	keySym := xdr.ScSymbol("public_key")
 	sigSym := xdr.ScSymbol("signature")
 	m := xdr.ScMap{

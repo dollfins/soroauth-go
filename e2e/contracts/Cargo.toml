@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["modular-account", "session-keys", "threshold-account", "social-recovery"]
+members = ["modular-account", "session-keys", "threshold-account", "policy-account"]
 
 # Standard Soroban release profile: contracts are deployed by size, and the
 # host has no unwinder, so panics abort.

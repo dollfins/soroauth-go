@@ -67,6 +67,8 @@ var commandSpecs = []commandSpec{
 		Flags: []flagSpec{
 			{Name: "entry", Description: "authorization entry or transaction envelope, as base64 XDR", TakesValue: true},
 			{Name: "valid-until", Description: "the last ledger at which the signature is valid", TakesValue: true},
+			{Name: "valid-for", Description: "the signature lifetime in ledgers, resolved against the current ledger (needs --rpc-url)", TakesValue: true},
+			{Name: "rpc-url", Description: "RPC endpoint used to resolve --valid-for (default $SOROAUTH_RPC_URL)", TakesValue: true},
 			{Name: "network", Description: "testnet, public, or a literal network passphrase", TakesValue: true},
 			{Name: "json", Description: "output as JSON", TakesValue: false},
 		},
@@ -77,8 +79,11 @@ var commandSpecs = []commandSpec{
 		Flags: []flagSpec{
 			{Name: "entry", Description: "authorization entry or transaction envelope, as base64 XDR", TakesValue: true},
 			{Name: "valid-until", Description: "the last ledger at which the signature is valid", TakesValue: true},
+			{Name: "valid-for", Description: "the signature lifetime in ledgers, resolved against the current ledger (needs --rpc-url)", TakesValue: true},
+			{Name: "rpc-url", Description: "RPC endpoint used to resolve --valid-for (default $SOROAUTH_RPC_URL)", TakesValue: true},
 			{Name: "network", Description: "testnet, public, or a literal network passphrase", TakesValue: true},
 			{Name: "secret-env", Description: "name of the environment variable holding the seed", TakesValue: true},
+			{Name: "assertion", Description: "path to a WebAuthn assertion JSON file, or - for stdin", TakesValue: true},
 			{Name: "for", Description: "credential node to sign, when it is not the signer's own address", TakesValue: true},
 			{Name: "json", Description: "output as JSON", TakesValue: false},
 		},
@@ -89,6 +94,8 @@ var commandSpecs = []commandSpec{
 		Flags: []flagSpec{
 			{Name: "entry", Description: "the authorization entry, as base64 XDR", TakesValue: true},
 			{Name: "valid-until", Description: "the last ledger at which the signatures are valid", TakesValue: true},
+			{Name: "valid-for", Description: "the signature lifetime in ledgers, resolved against the current ledger (needs --rpc-url)", TakesValue: true},
+			{Name: "rpc-url", Description: "RPC endpoint used to resolve --valid-for (default $SOROAUTH_RPC_URL)", TakesValue: true},
 			{Name: "delegate", Description: "a delegate address; repeat for several", TakesValue: true},
 			{Name: "nested-json", Description: "JSON string defining nested delegate tree", TakesValue: true},
 			{Name: "json", Description: "output as JSON", TakesValue: false},
@@ -158,6 +165,17 @@ var commandSpecs = []commandSpec{
 		Flags: []flagSpec{
 			{Name: "shell", Description: "which shell: bash, zsh, or fish", TakesValue: true},
 			{Name: "json", Description: "output as JSON", TakesValue: false},
+		},
+	},
+	{
+		Name:        "wasm-budget",
+		Description: "measure the wasm core against a size ceiling",
+		Flags: []flagSpec{
+			{Name: "out", Description: "path to the wasm artifact to measure", TakesValue: true},
+			{Name: "budget", Description: "maximum allowed size in bytes", TakesValue: true},
+			{Name: "prev-size", Description: "previous release's size, for a delta", TakesValue: true},
+			{Name: "build-cmd", Description: "command to build the artifact before measuring", TakesValue: true},
+			{Name: "json", Description: "output the result as JSON", TakesValue: false},
 		},
 	},
 }

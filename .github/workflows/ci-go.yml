@@ -96,6 +96,34 @@ jobs:
             echo "::endgroup::"
           done
           exit "$failed"
+  # A fuzz run is not a pull-request check: pull requests are capped at the
+  # three checks ci.yml reports, and 30 seconds per target per push would slow
+  # every review for targets whose job is to find inputs over time, not to
+  # gate one diff. It runs on push to main and on demand, and the seed corpora
+  # in testdata/fuzz are what a pull request actually exercises, through the
+  # ordinary `go test ./...` in "vet and test".
+  #
+  # Every target is a step of this one job rather than a job each, so the row
+  # count does not grow with each target added.
+  fuzz:
+    name: fuzz targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: fuzz ValidateDelegateOrder
+        run: go test -run='^$' -fuzz=FuzzValidateDelegateOrder -fuzztime=30s .
+      - name: fuzz Inspect
+        run: go test -run='^$' -fuzz=FuzzInspect -fuzztime=30s .
+      # The xdrcopy round-trip target: a copy must be byte-identical to its
+      # source and share no memory with it. It lives in its own package, so it
+      # needs its own invocation.
+      - name: fuzz the xdrcopy round-trip
+        run: go test -run='^$' -fuzz=FuzzCopyRoundTrip -fuzztime=30s ./internal/xdrcopy
+
   bench:
     name: signing-path budgets
     runs-on: ubuntu-latest

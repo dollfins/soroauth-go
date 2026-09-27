@@ -59,12 +59,7 @@ func ExitCode(err error) int {
 	return ExitGeneralError
 }
 
-// newError wraps an error with the given exit code.
-func newError(exitCode int, format string, args ...any) error {
-	return &cliError{err: fmt.Errorf(format, args...), exitCode: exitCode}
-}
-
-// newErrorf wraps an error with the given exit code (alias for newError).
+// newErrorf wraps an error with the given exit code.
 func newErrorf(exitCode int, format string, args ...any) error {
 	return &cliError{err: fmt.Errorf(format, args...), exitCode: exitCode}
 }
@@ -85,6 +80,7 @@ commands:
   doctor         check the local environment for common first-run problems
   cross-compile  build soroauth for multiple targets
   completions    emit a shell completion script (bash, zsh, fish)
+  wasm-budget    measure the wasm core against a size ceiling
 
 run "soroauth <command> -h" for the flags of a command.
 
@@ -114,6 +110,18 @@ func main() {
 // environment, and a test must be able to supply one without mutating the real
 // environment of the test binary.
 func run(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
+	return runWithStdin(args, stdout, stderr, getenv, os.Stdin)
+}
+
+// runWithStdin is run with the standard input it reads `--entry -` from
+// injected, so a test can pipe one subcommand's output into the next without
+// replacing the process's real os.Stdin. Replacing it is not safe here: the
+// test binary runs cases in parallel and os.Stdin is shared, so a swap made by
+// one case is visible to every other one.
+//
+// Only payload, sign and delegates accept `--entry -`; the remaining
+// subcommands are dispatched exactly as run would dispatch them.
+func runWithStdin(args []string, stdout, stderr io.Writer, getenv func(string) string, stdin io.Reader) error {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return newErrorf(ExitUsageError, "no command given")
@@ -121,11 +129,11 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) er
 
 	switch args[0] {
 	case "payload":
-		return runPayload(args[1:], stdout, stderr)
+		return runPayloadWithStdin(args[1:], stdout, stderr, getenv, stdin)
 	case "sign":
-		return runSign(args[1:], stdout, stderr, getenv)
+		return runSignWithStdin(args[1:], stdout, stderr, getenv, stdin)
 	case "delegates":
-		return runDelegates(args[1:], stdout, stderr)
+		return runDelegatesWithStdin(args[1:], stdout, stderr, getenv, stdin)
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
 	case "verify":
@@ -140,6 +148,8 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) er
 		return runCrossCompile(args[1:], stdout, stderr)
 	case "completions":
 		return runCompletions(args[1:], stdout, stderr)
+	case "wasm-budget":
+		return runWASMBudget(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil
@@ -166,6 +176,23 @@ func resolveNetwork(value string) (string, error) {
 	}
 }
 
+// readEntryFlag reads the entry value from stdin if value is "-", otherwise
+// returns value.
+//
+// This is the path for the subcommands that do not inject their own reader —
+// inspect, verify and tree. It delegates to resolveEntryArg rather than reading
+// os.Stdin itself so that there is one definition of what `--entry -` means,
+// including the whitespace trimming a pipeline depends on; the two used to
+// diverge, and `soroauth delegates … | soroauth inspect --entry -` failed with
+// "input not fully consumed" on the trailing newline.
+func readEntryFlag(value string) (string, error) {
+	resolved, err := resolveEntryArg(value, os.Stdin)
+	if err != nil {
+		return "", fmt.Errorf("reading from stdin: %w", err)
+	}
+	return resolved, nil
+}
+
 // decodeEntry parses a base64 authorization entry from a flag value.
 //
 // The entry comes from the command line, which means it came from somewhere
@@ -179,7 +206,11 @@ func decodeEntry(value string) (xdr.SorobanAuthorizationEntry, error) {
 	if value == "" {
 		return xdr.SorobanAuthorizationEntry{}, newErrorf(ExitUsageError, "--entry is required")
 	}
-	entry, err := soroauth.DecodeAuthorizationEntry(value)
+	val, err := readEntryFlag(value)
+	if err != nil {
+		return xdr.SorobanAuthorizationEntry{}, newErrorf(ExitUsageError, "%w", err)
+	}
+	entry, err := soroauth.DecodeAuthorizationEntry(val)
 	if err != nil {
 		return xdr.SorobanAuthorizationEntry{}, newErrorf(ExitUsageError, "decoding --entry: %w", err)
 	}
@@ -209,12 +240,16 @@ func decodeEntryOrEnvelope(value string) (decodedInput, error) {
 	if value == "" {
 		return decodedInput{}, newErrorf(ExitUsageError, "--entry is required")
 	}
+	val, err := readEntryFlag(value)
+	if err != nil {
+		return decodedInput{}, newErrorf(ExitUsageError, "%w", err)
+	}
 
 	var envelope xdr.TransactionEnvelope
-	envelopeErr := xdr.SafeUnmarshalBase64(value, &envelope)
+	envelopeErr := xdr.SafeUnmarshalBase64(val, &envelope)
 
 	var entry xdr.SorobanAuthorizationEntry
-	entryErr := xdr.SafeUnmarshalBase64(value, &entry)
+	entryErr := xdr.SafeUnmarshalBase64(val, &entry)
 
 	// An envelope only wins when it decodes and carries an invokeHostFunction
 	// operation. A blob that decodes as an envelope but has nothing to
@@ -286,7 +321,11 @@ func runTUI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 			}
 		case "--valid-until":
 			if i+1 < len(args) {
-				fmt.Sscanf(args[i+1], "%d", &validUntilLedger)
+				// A malformed value leaves validUntilLedger at zero, which the
+				// required-flag check below refuses. The TUI parses its own
+				// flags rather than using the flag package, so there is no
+				// parse error to surface here.
+				_, _ = fmt.Sscanf(args[i+1], "%d", &validUntilLedger)
 				i++
 			}
 		case "--network":

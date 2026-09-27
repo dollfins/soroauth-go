@@ -168,7 +168,7 @@ func TestSignRejects(t *testing.T) {
 		{
 			name:    "no secret-env",
 			args:    []string{"sign", "--entry", v.UnsignedEntryXDR, "--valid-until", "1", "--network", "testnet"},
-			wantMsg: "--secret-env is required",
+			wantMsg: "exactly one of --secret-env or --assertion must be provided",
 		},
 		{
 			name: "the variable is unset",

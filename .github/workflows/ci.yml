@@ -43,8 +43,35 @@ jobs:
       # calls through sync.Pool: TestCopyConcurrentReuse only proves the
       # no-aliasing guarantee holds under concurrency if something is actually
       # watching for concurrent misuse.
+      # The seed corpus is generated from the golden vectors, so it can drift
+      # the same way they can. Regenerating and diffing costs a second and is a
+      # step of this job rather than a job of its own, because pull requests are
+      # capped at three checks. The seeds themselves are exercised by the
+      # `go test` below: Go runs every file in
+      # testdata/fuzz/FuzzValidateDelegateOrder as a normal subtest.
+      - name: fuzz seed corpus is reproducible
+        run: |
+          go run ./cmd/gencorpus
+          if ! git diff --exit-code testdata/fuzz; then
+            echo
+            echo "The committed fuzz seed corpus differs from freshly generated seeds."
+            echo "Regenerate it with:"
+            echo "  go run ./cmd/gencorpus"
+            echo "and commit the result."
+            exit 1
+          fi
       - name: test
+        run: go test -race -v -run TestAuthorizeEntryExpirationProperty ./...
+      - name: test all
         run: go test -race ./...
+      # The parity regression test lives in the e2e package, so the tag hides it
+      # from `go test ./...`, but it needs no network: it reads the committed
+      # report when a live one is absent (e2e/testdata/parity_regression.json).
+      # Run here as a step of this job rather than as a job of its own, because
+      # pull requests are capped at three checks. This is what makes a parity
+      # regression fail the build instead of only a local run.
+      - name: parity report regression
+        run: go test -tags e2e -run TestParityReportRegression ./e2e
 
   golden-drift:
     name: golden vectors are reproducible
