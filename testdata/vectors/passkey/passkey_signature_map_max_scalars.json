@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "name": "passkey_signature_map_max_scalars",
+  "library": "smart-account-kit@0.8.0",
+  "xdr_sdk": "@stellar/stellar-sdk@16.3.0",
+  "public_key_hex": "048c0e33f9be5d60030bdad28259d67644bef31217d70a8ed8eabb74bc958f17135ed4692eb87230cd421a804ad0a8c94d3d8e49d07cd8f2d10a592655a6fd06ef",
+  "signature_hex": "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550",
+  "signature_map_xdr": "AAAAEQAAAAEAAAACAAAADwAAAApwdWJsaWNfa2V5AAAAAAANAAAAQQSMDjP5vl1gAwva0oJZ1nZEvvMSF9cKjtjqu3S8lY8XE17UaS64cjDNQhqAStCoyU09jknQfNjy0QpZJlWm/QbvAAAAAAAADwAAAAlzaWduYXR1cmUAAAAAAAANAAAAQP////8AAAAA//////////+85vqtpxeehPO5ysL8YyVQ/////wAAAAD//////////7zm+q2nF56E87nKwvxjJVA=",
+  "library_scval_xdr": "AAAAEAAAAAEAAAABAAAAEQAAAAEAAAACAAAADwAAAApwdWJsaWNfa2V5AAAAAAANAAAAQQSMDjP5vl1gAwva0oJZ1nZEvvMSF9cKjtjqu3S8lY8XE17UaS64cjDNQhqAStCoyU09jknQfNjy0QpZJlWm/QbvAAAAAAAADwAAAAlzaWduYXR1cmUAAAAAAAANAAAAQP////8AAAAA//////////+85vqtpxeehPO5ysL8YyVQ/////wAAAAD//////////7zm+q2nF56E87nKwvxjJVA="
+}

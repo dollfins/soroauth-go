@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,9 +81,14 @@ commands:
   doctor         check the local environment for common first-run problems
   cross-compile  build soroauth for multiple targets
   completions    emit a shell completion script (bash, zsh, fish)
+  man            emit a roff man page
   wasm-budget    measure the wasm core against a size ceiling
 
 run "soroauth <command> -h" for the flags of a command.
+
+flags:
+  --version      print the build version, commit and Go version
+  -h, --help     print this help
 
 exit codes:
   0  success
@@ -148,8 +154,12 @@ func runWithStdin(args []string, stdout, stderr io.Writer, getenv func(string) s
 		return runCrossCompile(args[1:], stdout, stderr)
 	case "completions":
 		return runCompletions(args[1:], stdout, stderr)
+	case "man":
+		return runMan(args[1:], stdout, stderr)
 	case "wasm-budget":
 		return runWASMBudget(args[1:], stdout, stderr)
+	case "--version", "-version":
+		return runVersion(stdout)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil
@@ -159,16 +169,18 @@ func runWithStdin(args []string, stdout, stderr io.Writer, getenv func(string) s
 	}
 }
 
-// resolveNetwork turns the --network flag into a passphrase. The two named
+// resolveNetwork turns the --network flag into a passphrase. The three named
 // networks are shorthands; anything else is taken as a literal passphrase, so
-// futurenet, a standalone network or a quickstart container all work without
+// a standalone network or a quickstart container all work without
 // this tool needing to know about them.
 func resolveNetwork(value string) (string, error) {
 	switch value {
 	case "":
-		return "", newErrorf(ExitUsageError, "--network is required (testnet, public, or a literal passphrase)")
+		return "", newErrorf(ExitUsageError, "--network is required (testnet, futurenet, public, or a literal passphrase)")
 	case "testnet":
 		return network.TestNetworkPassphrase, nil
+	case "futurenet":
+		return network.FutureNetworkPassphrase, nil
 	case "public":
 		return network.PublicNetworkPassphrase, nil
 	default:
@@ -193,6 +205,34 @@ func readEntryFlag(value string) (string, error) {
 	return resolved, nil
 }
 
+// classifyInput says which of the two ways an --entry value failed to decode,
+// and returns err itself for a third that is neither.
+//
+// "This is not base64" and "this is base64 but is not <want>" used to produce
+// the same message, and they call for completely different fixes: retype or
+// re-copy the blob, versus hand over the right XDR type. The classification is
+// made by asking the base64 decoder directly rather than by reading the
+// underlying error's text, because that error comes from a third party and its
+// wording is not a contract this CLI can rely on.
+//
+// A refusal at one of the library's decode limits is passed through unchanged:
+// the input was well-formed enough to reach the limit, and calling that
+// "not base64" would send the caller looking at the wrong thing.
+//
+// Neither branch echoes the input. An --entry value may be a signed entry, so
+// repeating it would put it in a terminal scrollback, a CI log, or a shell
+// session — the underlying error describes the failure and never quotes the
+// blob.
+func classifyInput(value, want string, err error) error {
+	if errors.Is(err, soroauth.ErrDecodeLimit) {
+		return err
+	}
+	if _, base64Err := base64.StdEncoding.DecodeString(value); base64Err != nil {
+		return fmt.Errorf("input is not valid base64: %w", err)
+	}
+	return fmt.Errorf("input is valid base64 but is not %s: %w", want, err)
+}
+
 // decodeEntry parses a base64 authorization entry from a flag value.
 //
 // The entry comes from the command line, which means it came from somewhere
@@ -212,7 +252,8 @@ func decodeEntry(value string) (xdr.SorobanAuthorizationEntry, error) {
 	}
 	entry, err := soroauth.DecodeAuthorizationEntry(val)
 	if err != nil {
-		return xdr.SorobanAuthorizationEntry{}, newErrorf(ExitUsageError, "decoding --entry: %w", err)
+		return xdr.SorobanAuthorizationEntry{}, newErrorf(ExitUsageError,
+			"decoding --entry: %w", classifyInput(val, "a Soroban authorization entry", err))
 	}
 	return entry, nil
 }
@@ -265,7 +306,10 @@ func decodeEntryOrEnvelope(value string) (decodedInput, error) {
 	}
 
 	if entryErr != nil {
-		return decodedInput{}, newErrorf(ExitUsageError, "decoding --entry: %w", entryErr)
+		return decodedInput{}, newErrorf(ExitUsageError, "decoding --entry: %w",
+			classifyInput(val,
+				"a Soroban authorization entry or a transaction envelope with an invokeHostFunction operation",
+				entryErr))
 	}
 	return decodedInput{Entry: entry}, nil
 }
@@ -370,7 +414,7 @@ Interactive TUI for inspecting and signing an authorization entry.
 flags:
   --entry        base64-encoded authorization entry (required)
   --valid-until  signature expiration ledger (required)
-  --network      network passphrase: testnet, public, or literal (required)
+  --network      network passphrase: testnet, futurenet, public, or literal (required)
   --secret-env   name of environment variable holding the secret seed (required)
   --for          target address to sign for (optional, defaults to signer's address)
 

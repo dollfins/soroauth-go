@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "diff_016_source_account",
+  "generator": "cmd/difffuzz",
+  "seed": 20260927,
+  "index": 16,
+  "credential_arm": "source_account",
+  "network_passphrase": "soroauth differential fuzzing network",
+  "valid_until_ledger": 32106770,
+  "unsigned_entry_xdr": "AAAAAAAAAAAAAAAB/ng0mfQgFLLNp3tbw7qwKVAi6ZwOiEmSWqcEAiQwMikAAAAId2l0aGRyYXcAAAACAAAACUKQEhD10WjYf7vQNBYoqoAAAAAGGaOtlNmmu18AAAABAAAAAAAAAAG+VhgLovQZREC9LNilm8OEcpwaIBmgmrg0Er0S3lHivwAAAAh0cmFuc2ZlcgAAAAAAAAACAAAAAAAAAAFwnBCwEY8VJBT+0ruCS5HVP8v+nYai7pghPahz2cIE/AAAAAh3aXRoZHJhdwAAAAMAAAAFvjocMCwjvacAAAARAAAAAQAAAAIAAAAPAAAAAmswAAAAAAAPAAAAB2RlcG9zaXQAAAAADwAAAAJrMQAAAAAAEgAAAAAAAAAABpY3oH/JL5X9rWw6y5o2+ZdpGu7Q6HzANMOtzR6I/4wAAAADAjisVgAAAAAAAAABAAAAAAAAAAAAAAAA98tQ22WB1OLrSmYA5Xz2DcYPe2kNc3ugf7fn4OwniBMMOI6v01kmFIY07iDxhxse9Ex5gWPUev69bNNgySxeOwAAAAC8C4qRHGCth14eL+FdOZUMkcUazQEYFLeaUst0p94uBQAAAAA=",
+  "preimage_xdr": "",
+  "payload_hex": ""
+}

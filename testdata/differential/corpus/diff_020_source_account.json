@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "diff_020_source_account",
+  "generator": "cmd/difffuzz",
+  "seed": 20260927,
+  "index": 20,
+  "credential_arm": "source_account",
+  "network_passphrase": "Test SDF Network ; September 2015",
+  "valid_until_ledger": 2143419194,
+  "unsigned_entry_xdr": "AAAAAAAAAAAAAAABHoK7uwKKWLNLdLz9l2i4b0X3glsogthLcEtqk7sJNvsAAAAHZGVwb3NpdAAAAAADAAAAAQAAAA4AAAAec29yb2F1dGggZGlmZmVyZW50aWFsIGFyZ3VtZW50AAAAAAADJYdmgwAAAAIAAAAAAAAAAQErKCzaVzsTQ1EJAMEqkTgtHxft3dH8FMVJoOHjHzfUAAAABGJ1cm4AAAACAAAAA3b0gXoAAAAGytuzjymO9w8AAAABAAAAAAAAAAGOXxDhC5UqDTFWQaI71rH6Ry86NVUOgFVzfXhysdN50AAAAAdkZXBvc2l0AAAAAAAAAAAAAAAAAAAAAAEuIISjJlpzybHcHsPw8X6ihYhAmtECVwZdM0OoK5lAsAAAAAdhcHByb3ZlAAAAAAQAAAAKrclWoOcA8KnHMHt2MwF6wQAAAAEAAAAKya0DuwAcH39KVBSSQKEpKgAAABAAAAABAAAAAAAAAAA=",
+  "preimage_xdr": "",
+  "payload_hex": ""
+}

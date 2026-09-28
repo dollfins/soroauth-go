@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/asn1"
 	"errors"
 	"fmt"
 	"math/big"
@@ -64,11 +65,59 @@ func ParseSecp256r1Signature(signature []byte) (*big.Int, *big.Int, error) {
 	}
 	r := new(big.Int).SetBytes(signature[:32])
 	s := new(big.Int).SetBytes(signature[32:])
-	n := elliptic.P256().Params().N
-	if r.Sign() <= 0 || r.Cmp(n) >= 0 || s.Sign() <= 0 || s.Cmp(n) >= 0 {
-		return nil, nil, errors.New("signature scalars are outside the P-256 range")
+	if err := checkP256Scalars(r, s); err != nil {
+		return nil, nil, err
 	}
 	return r, s, nil
+}
+
+// ParseDERECDSASignature parses a DER-encoded ECDSA signature into its two
+// scalars.
+//
+// DER is the form a WebAuthn assertion's signature arrives in (WebAuthn Level 3
+// §6.5.6, "Signature", which is the ASN.1 structure of ECDSA-Sig-Value per RFC
+// 3279 §2.2.3). It is not the form the Soroban signature value holds: a passkey
+// wallet's __check_auth decodes the fixed-width low-S r || s bytes
+// Secp256r1SignatureScVal builds. This is the boundary between the two, so it
+// lives with the P-256 primitives rather than in the WebAuthn parser, which
+// treats the signature as opaque bytes.
+//
+// The scalars are range-checked exactly as ParseSecp256r1Signature checks the
+// fixed-width form, and a signature with trailing bytes after the SEQUENCE —
+// which RFC 3279's DER encoding does not allow and which no honest encoder
+// produces — is refused rather than accepted on a prefix. Both refusals are
+// fail-closed: a value that does not decode to exactly one well-formed
+// signature is not a signature.
+func ParseDERECDSASignature(signature []byte) (*big.Int, *big.Int, error) {
+	var parsed struct {
+		R *big.Int
+		S *big.Int
+	}
+	rest, err := asn1.Unmarshal(signature, &parsed)
+	if err != nil {
+		return nil, nil, fmt.Errorf("DER signature: %w", err)
+	}
+	if len(rest) != 0 {
+		return nil, nil, fmt.Errorf("DER signature carries %d trailing bytes", len(rest))
+	}
+	if parsed.R == nil || parsed.S == nil {
+		return nil, nil, errors.New("DER signature is missing its r or s integer")
+	}
+	if err := checkP256Scalars(parsed.R, parsed.S); err != nil {
+		return nil, nil, err
+	}
+	return parsed.R, parsed.S, nil
+}
+
+// checkP256Scalars requires r and s to be in [1, n-1], the range a P-256 ECDSA
+// signature's scalars must fall in. Zero, negative and out-of-order values are
+// all refused rather than passed to a verifier that might accept them.
+func checkP256Scalars(r, s *big.Int) error {
+	n := elliptic.P256().Params().N
+	if r.Sign() <= 0 || r.Cmp(n) >= 0 || s.Sign() <= 0 || s.Cmp(n) >= 0 {
+		return errors.New("signature scalars are outside the P-256 range")
+	}
+	return nil
 }
 
 // Secp256r1SignatureScVal builds the sorted symbol-keyed passkey signature

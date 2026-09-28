@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "diff_111_address_with_delegates",
+  "generator": "cmd/difffuzz",
+  "seed": 20260927,
+  "index": 111,
+  "credential_arm": "address_with_delegates",
+  "network_passphrase": "soroauth differential fuzzing network",
+  "valid_until_ledger": 3059388803,
+  "unsigned_entry_xdr": "AAAAAwAAAAAAAAAAQUS/wBfTTDXQJkO2oL5cgii/jKvw3YRLdj+9utqXlilFCuBdMa5iwrZakYMAAAABAAAAAQAAAAAAAAAABHNva0IEHQ/7eaKLEagOTFskmFP6mm1fGVrGW5kyItAAAAABAAAAAAAAAAAAAAABGVuvUnpMd7e5eKlkivhPV4ebtljIFbWdl2qILLZIWkcAAAAId2l0aGRyYXcAAAADAAAAEgAAAAAAAAAAqUgwaddP/dnfmKlLU7sX0SoteXKtjtfduqUgOIyD8EcAAAAAAAAAAAAAAAMT98nMAAAAAQAAAAAAAAABy4gLCZt9t0QC8AW3A1dH2DjFe5PhtzlwJi0ce3OiROAAAAAEbWludAAAAAEAAAAQAAAAAQAAAAEAAAAPAAAAB2FwcHJvdmUAAAAAAA==",
+  "preimage_xdr": "AAAACrzX/kddJmSFt4ub0RtO7saf63Kl7m1VGBU8q0qUqqlsRQrgXTGuYsK2WpGDAAAAAAAAAABBRL/AF9NMNdAmQ7agvlyCKL+Mq/DdhEt2P7262peWKQAAAAAAAAABGVuvUnpMd7e5eKlkivhPV4ebtljIFbWdl2qILLZIWkcAAAAId2l0aGRyYXcAAAADAAAAEgAAAAAAAAAAqUgwaddP/dnfmKlLU7sX0SoteXKtjtfduqUgOIyD8EcAAAAAAAAAAAAAAAMT98nMAAAAAQAAAAAAAAABy4gLCZt9t0QC8AW3A1dH2DjFe5PhtzlwJi0ce3OiROAAAAAEbWludAAAAAEAAAAQAAAAAQAAAAEAAAAPAAAAB2FwcHJvdmUAAAAAAA==",
+  "payload_hex": "d00fb3ba8da434d524f75b5d530861bd77656a3c7d43b50d09010bec3772d2a1"
+}

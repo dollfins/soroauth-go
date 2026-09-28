@@ -128,7 +128,7 @@ func runVerify(args []string, stdout, stderr io.Writer) error {
 	}
 
 	entryFlag := flags.String("entry", "", "the authorization entry or transaction envelope, as base64 XDR")
-	networkFlag := flags.String("network", "", "testnet, public, or a literal network passphrase")
+	networkFlag := flags.String("network", "", "testnet, futurenet, public, or a literal network passphrase")
 	validUntil := flags.Uint("valid-until", 0, "assert the expiration the entry carries (optional)")
 	allowUnsigned := flags.Bool("allow-unsigned", false, "accept unsigned nodes (a Void top-level node of a delegates entry is legitimate under CAP-71-01)")
 	jsonFlag := flags.Bool("json", false, "output as JSON")

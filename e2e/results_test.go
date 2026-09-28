@@ -13,10 +13,11 @@ import (
 )
 
 // requiredScenarios is the full set §5.10 defines, plus the contract-fixture
-// scenarios added with the session-keys and threshold-account fixtures.
-// RESULTS.md is only written when every one of them ran, so the committed file
-// can never be a partial record of a single-scenario run.
-var requiredScenarios = []string{"A", "B", "C", "C-control", "D", "E", "F", "G", "H", "I"}
+// scenarios added with the session-keys, threshold-account and passkey-wallet
+// fixtures. RESULTS.md is only written when every one of them ran, so the
+// committed file can never be a partial record of a single-scenario run —
+// adding a scenario id here is what makes its omission impossible.
+var requiredScenarios = []string{"A", "B", "C", "C-control", "D", "E", "F", "G", "H", "I", "J", "K"}
 
 func TestMain(m *testing.M) {
 	code := m.Run()

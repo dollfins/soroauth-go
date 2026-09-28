@@ -1,0 +1,15 @@
+{
+  "name": "soroauth-go-spellcheck",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spell-check dependencies for soroauth-go documentation",
+  "scripts": {
+    "spellcheck": "cspell --config cspell.json './**/*.md'"
+  },
+  "devDependencies": {
+    "cspell": "^10.3.4"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

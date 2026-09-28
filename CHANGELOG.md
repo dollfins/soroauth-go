@@ -7,6 +7,81 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- `ExpirationAfter` has a runnable doc example. `ExampleExpirationAfter` walks
+  the "about an hour" case and both refusals (a zero lifetime, and a sum that
+  would overflow a ledger sequence), so the function's contract is executed by
+  `go test` rather than described in prose that can go stale. (#139)
+
+- `soroauth --version` reports the build version, commit and Go toolchain. The
+  three build fields are stamped with `-ldflags`: the release workflow passes
+  the tag, the commit and the run's date, and `make build` stamps the checkout
+  it built from. A binary built with neither reports `dev`/`unknown` rather
+  than an empty string, and the toolchain version is read from the running
+  binary so it cannot drift from the toolchain that produced it. A test fails
+  if the release workflow stops passing the fields. (#140)
+
+- New subcommand: `soroauth man` emits a roff man page for the CLI, to stdout
+  or to a file with `--out`. The page is generated from the same command/flag
+  table the shell completions come from, so it cannot document a flag the
+  binary does not accept, and it carries no build timestamp — two builds of the
+  same source emit identical bytes. `make man` writes `bin/soroauth.1`, and
+  every `v*` release attaches `soroauth.1` alongside the binaries. (#141)
+
+- `--entry` input failures now say which of the two problems a value has: it is
+  not base64 at all, or it decodes as base64 but is not an authorization entry
+  (or a transaction envelope with an invokeHostFunction operation). The two used
+  to read identically, and they call for different fixes. Neither message
+  echoes the input, which may be a signed entry. (#142)
+
+- Passkey signature-shape golden vectors. `testdata/gen/gen-passkey.mjs` drives
+  a pinned `smart-account-kit@0.8.0` (the OpenZeppelin/Stellar SDK for smart
+  accounts with WebAuthn passkeys) and records the `{ public_key, signature }`
+  map it builds for fixed P-256 keys and signatures, including the leading-zero
+  and high-bit edge bytes. It refuses to run against any other library version,
+  `passkey_golden_test.go` asserts `Secp256r1SignatureScVal` reproduces every
+  vector byte for byte, and CI regenerates them and fails on drift. The passkey
+  signature shape is no longer only asserted in a guide. (#27)
+
+- `examples/browser-passkey` now signs *and submits*: it builds a native-XLM
+  SAC transfer from the wallet contract, simulates in record mode, derives and
+  signs the payload in the browser, re-simulates in enforce mode, submits, and
+  prints the transaction hash with a `stellar.expert` link. The fee payer is
+  either a relayer URL (no secret in the page) or a throwaway testnet secret
+  held in memory for one call. `examples/browser-passkey/app.test.mjs` runs the
+  page's SDK calls, credential-arm walk and signature ScVal shape against the
+  pinned SDK, because the ceremony itself needs a browser. (#55)
+
+- Differential fuzzing across implementations. `cmd/difffuzz` generates a
+  deterministic corpus of random, structurally valid authorization entries
+  across every credentials arm and records this library's preimage and payload
+  for each; `make differential` requires `@stellar/stellar-sdk` and the Python
+  `stellar-sdk` to reproduce every payload, and a case that diverged is frozen
+  into `testdata/differential/regressions/` so it keeps being checked. Fixed
+  vectors only cover the cases someone thought of. (#47)
+
+- The parity suites run on a weekly schedule and on published releases as well
+  as on push to `main`, and the matrix now includes the JS vector drift check
+  and the differential suite. A failure names the suite in its job name and the
+  case in its log. (#48)
+
+- `NewPasskeySignerFromAssertion`, the full passkey signer: it takes a parsed
+  WebAuthn assertion and the credential's P-256 public key, verifies the
+  assertion itself — the UP/UV flags the options require, the challenge binding,
+  and the ES256 signature over
+  `SHA-256(authenticatorData || SHA-256(clientDataJSON))` — and only then writes
+  the `{public_key, signature}` ScVal a passkey wallet's `__check_auth` decodes.
+  A failure is `ErrVerificationFailed` or `ErrSignatureMismatch`, and it works
+  through `AuthorizeEntry` with `ForAddress` unchanged. `ParseDERECDSASignature`
+  and `WebAuthnAssertion.SignedBytes` are the two primitives it is built from. (#26)
+
+- `docs/passkeys.md` teaches the correct challenge check. It previously
+  compared `SHA-256(clientDataJSON)` against the payload, which never held — the
+  authenticator does not sign the client data alone, and its hash is not the
+  payload. It now uses `ParseWebAuthnAssertionForPayload`, which compares the
+  challenge in the received client data against the payload, and the signing
+  example uses `NewPasskeySignerFromAssertion` rather than hand-rolled ES256
+  verification and a callback signer.
+
 - `DescribeSignature` and `SignatureShape` report structural descriptions of uncheckable custom account signatures best-effort without upgrading them into verification verdicts. (#63)
 
 - `VerifyAll` batch verification API with configurable concurrency (`WithConcurrency`), reporting per-entry verdicts without aborting the entire batch on individual entry failures. (#62)

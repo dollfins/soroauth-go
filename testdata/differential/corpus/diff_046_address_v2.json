@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "diff_046_address_v2",
+  "generator": "cmd/difffuzz",
+  "seed": 20260927,
+  "index": 46,
+  "credential_arm": "address_v2",
+  "network_passphrase": "Public Global Stellar Network ; September 2015",
+  "valid_until_ledger": 1,
+  "unsigned_entry_xdr": "AAAAAgAAAAAAAAAAuriMOzdIiKxTMC26XudHd85Gq7Is8rp5mFqGzd+H+23TMbc9XBHWVAAAAAAAAAAQAAAAAQAAAAAAAAAAAAAAAb4oGazd5ihJR6f59RJvwOmpaouJqItA8PWS3lidltOiAAAABHN3YXAAAAADAAAADgAAAB5zb3JvYXV0aCBkaWZmZXJlbnRpYWwgYXJndW1lbnQAAAAAAAThc3F4AAAABFaOB/wAAAAA",
+  "preimage_xdr": "AAAACnrDOZdUTjF10ma9AiQ5sizbFlCMARY/JuXLKj4QRal50zG3PVwR1lQAAAABAAAAAAAAAAC6uIw7N0iIrFMwLbpe50d3zkarsizyunmYWobN34f7bQAAAAAAAAABvigZrN3mKElHp/n1Em/A6alqi4moi0Dw9ZLeWJ2W06IAAAAEc3dhcAAAAAMAAAAOAAAAHnNvcm9hdXRoIGRpZmZlcmVudGlhbCBhcmd1bWVudAAAAAAABOFzcXgAAAAEVo4H/AAAAAA=",
+  "payload_hex": "6adc2c7d140edb21cf9985382f5546b35e1c56730c41126efbb750a1127f3878"
+}

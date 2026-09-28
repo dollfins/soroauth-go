@@ -317,7 +317,7 @@ func ExampleMissingSignerError() {
 func ExampleUnsignedCredentialNodeError() {
 	// AuthorizeAll returns this when RequireAllSigned was given and a
 	// credential node in the resulting batch carries no signature.
-	err := fmt.Errorf("soroauth: authorize all: entry 0: %s: %w",
+	err := fmt.Errorf("soroauth: authorize all: entry 0 (%s): %w",
 		"GBEXAMPLE",
 		&UnsignedCredentialNodeError{Address: "GBEXAMPLE"})
 

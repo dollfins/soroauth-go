@@ -31,9 +31,6 @@
         font: inherit;
         margin-top: 0.25rem;
       }
-      textarea {
-        min-height: 6rem;
-      }
       button {
         margin-top: 1rem;
         padding: 0.5rem;
@@ -50,34 +47,64 @@
         opacity: 0.75;
         font-size: 0.85rem;
       }
+      fieldset {
+        border: 1px solid currentColor;
+        margin-top: 1rem;
+      }
     </style>
   </head>
   <body>
-    <h1>soroauth — sign a Soroban authorization entry with a passkey</h1>
+    <h1>soroauth — sign and submit a Soroban transfer with a passkey</h1>
     <p class="hint">
-      The browser derives the payload from the simulated entry with the
-      <code>@soroauth/wasm</code> core, then asks the authenticator to sign it as
-      the WebAuthn challenge. Nothing is asked of a server until the signed entry
-      is written back. See <code>README.md</code> in this directory.
+      The browser builds a native-XLM SAC transfer from the wallet contract,
+      derives the payload from the record-mode simulation with the
+      <code>@soroauth/wasm</code> core, signs it with a passkey as the WebAuthn
+      challenge, re-simulates in enforce mode, submits, and prints the
+      transaction hash and an explorer link. Nothing is asked of a server until
+      the signed entry exists. See <code>README.md</code> in this directory.
     </p>
 
-    <label for="entry">Unsigned entry (base64 XDR, from a record-mode simulation)</label>
-    <textarea id="entry" spellcheck="false"></textarea>
-
-    <label for="wallet">Wallet address (C…)</label>
-    <input id="wallet" placeholder="C…" spellcheck="false" />
-
-    <label for="validUntil">Signature expiration ledger</label>
-    <input id="validUntil" type="number" value="0" />
+    <label for="rpc">Soroban RPC URL</label>
+    <input id="rpc" value="https://soroban-testnet.stellar.org" spellcheck="false" />
 
     <label for="network">Network passphrase</label>
     <input id="network" value="Test SDF Network ; September 2015" spellcheck="false" />
 
-    <label for="rpc">Soroban RPC URL (for the submission step)</label>
-    <input id="rpc" value="https://soroban-testnet.stellar.org" spellcheck="false" />
+    <label for="wallet">Wallet address (C…, the passkey smart account)</label>
+    <input id="wallet" placeholder="C…" spellcheck="false" />
 
-    <button id="run">Sign the entry with a passkey</button>
+    <label for="destination">Destination address (G… or C…)</label>
+    <input id="destination" placeholder="G…" spellcheck="false" />
+
+    <label for="amount">Amount in stroops (1 XLM = 10000000)</label>
+    <input id="amount" type="number" value="10000000" />
+
+    <label for="payer">Fee payer address (G…)</label>
+    <input id="payer" placeholder="G…" spellcheck="false" />
+
+    <label for="validFor">Signature expiration: ledgers after the latest ledger</label>
+    <input id="validFor" type="number" value="120" />
+
+    <fieldset>
+      <legend>Paying for and submitting the transaction</legend>
+      <p class="hint">
+        A contract account cannot be a transaction source, so somebody else pays
+        the fee. Set a relayer URL to keep every secret out of this page, or
+        paste a throwaway TESTNET fee-payer secret to submit directly. The
+        secret is kept in memory for this one call and is never stored or
+        logged.
+      </p>
+
+      <label for="relayer">Relayer URL (optional; preferred)</label>
+      <input id="relayer" placeholder="https://relayer.example/submit" spellcheck="false" />
+
+      <label for="payerSecret">Testnet fee-payer secret (optional; used only if no relayer)</label>
+      <input id="payerSecret" type="password" placeholder="S…" autocomplete="off" spellcheck="false" />
+    </fieldset>
+
+    <button id="run">Sign and submit with a passkey</button>
     <div id="log" role="status" aria-live="polite"></div>
+    <p class="hint">Transaction: <a id="explorer" href="#" rel="noreferrer"></a></p>
 
     <!-- Built by ../../wasm/build.sh; defines globalThis.Go. -->
     <script src="../../wasm/dist/wasm_exec.js"></script>

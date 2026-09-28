@@ -218,12 +218,17 @@ func AuthorizeAll(
 
 	usedPlans := make(map[string]bool, len(config.delegatePlans))
 	out := make([]xdr.SorobanAuthorizationEntry, 0, len(entries))
+	// topAddresses carries each entry's top-level address, in input order,
+	// so a failure after the main loop (the RequireAllSigned check) can
+	// still name the entry it is reporting. It is empty for source-account
+	// entries, which that check skips.
+	topAddresses := make([]string, len(entries))
 
 	for i, entry := range entries {
 		if entry.Credentials.Type == xdr.SorobanCredentialsTypeSorobanCredentialsSourceAccount {
 			copied, err := xdrcopy.Copy(entry)
 			if err != nil {
-				return nil, fmt.Errorf("soroauth: authorize all: entry %d: %w", i, err)
+				return nil, fmt.Errorf("soroauth: authorize all: entry %d (source account): %w", i, err)
 			}
 			out = append(out, copied)
 			continue
@@ -231,12 +236,13 @@ func AuthorizeAll(
 
 		credentials, err := addressCredentials(entry.Credentials)
 		if err != nil {
-			return nil, fmt.Errorf("soroauth: authorize all: entry %d: %w", i, err)
+			return nil, fmt.Errorf("soroauth: authorize all: entry %d (credentials type %d): %w", i, entry.Credentials.Type, err)
 		}
 		address, err := FormatAddress(credentials.Address)
 		if err != nil {
-			return nil, fmt.Errorf("soroauth: authorize all: entry %d: %w", i, err)
+			return nil, fmt.Errorf("soroauth: authorize all: entry %d (<unformattable address>): %w", i, err)
 		}
+		topAddresses[i] = address
 
 		if plan, ok := config.delegatePlans[address]; ok {
 			wrapped, err := WithDelegates(entry, validUntilLedger, plan.Delegates, plan.TopSignature)
@@ -282,7 +288,7 @@ func AuthorizeAll(
 			}
 			nodes, err := credentialNodes(&out[i])
 			if err != nil {
-				return nil, fmt.Errorf("soroauth: authorize all: entry %d: %w", i, err)
+				return nil, fmt.Errorf("soroauth: authorize all: entry %d (%s): %w", i, topAddresses[i], err)
 			}
 			for _, node := range nodes {
 				if !isSigned(*node.signature) {
@@ -290,7 +296,7 @@ func AuthorizeAll(
 					if formatErr != nil {
 						address = "<unformattable address>"
 					}
-					return nil, fmt.Errorf("soroauth: authorize all: entry %d: %s: %w", i, address,
+					return nil, fmt.Errorf("soroauth: authorize all: entry %d (%s): %w", i, address,
 						&UnsignedCredentialNodeError{Address: address})
 				}
 			}

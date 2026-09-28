@@ -37,6 +37,8 @@ A full run takes roughly three minutes, most of it waiting for ledgers to close.
 | G | Session keys, expired | The same flow pointed at a key whose window has closed is refused with the contract's own `SessionExpired` (error 4), on the contract's clock. |
 | H | M-of-N, exactly M | A 2-of-3 `threshold-account` is authorized by exactly two signed delegates, so `AuthorizeAll` does not have to sign every delegate for the account to accept. |
 | I | M-of-N, M-1 | The same account with one signed delegate is refused with the contract's `InsufficientSignatures` (error 3). |
+| J | Passkey (P-256) wallet | A custom account that verifies an ES256 (secp256r1) signature over the authorization payload accepts an entry signed through `NewPasskeySigner` and `Secp256r1SignatureScVal`. |
+| K | Passkey, bad signature | The same wallet and transfer with a corrupted P-256 signature is refused by the host's own `secp256r1` verification, reported as `Error(Crypto, InvalidInput)`, "failed secp256r1 verification". |
 
 Several tests exist only to stop the accepting ones passing for the wrong reason:
 
@@ -54,6 +56,12 @@ Several tests exist only to stop the accepting ones passing for the wrong reason
   halves honest: F proves a window is honoured only because G proves the same
   window is enforced, and H proves partial signing works only because I proves a
   shortfall is caught.
+- **Scenario K asserts the host's own error, and keeps the key constant.** It is
+  satisfied only by a `Crypto` failure whose message names the `secp256r1`
+  verification. The credential public key it submits is the registered one and
+  only the low bit of `s` is flipped, so the refusal is the signature check and
+  not the wallet's own `UnknownKey` comparison — a test that swapped the key
+  would pass while proving something else.
 
 ## How a scenario works
 
@@ -81,6 +89,16 @@ executed `__check_auth`, its instruction count is too low, so those submissions
 are given extra instruction headroom — otherwise they run out of budget before
 reaching the rejection under test.
 
+The default headroom is sized for a refusal a *contract* returns as an error,
+where the work the recording pass missed is one `__check_auth` call. Scenario K's
+refusal is not that: the host's own `secp256r1` verification fails, and paying for
+that verification is most of the transaction's cost, so at the default multiplier
+the submission exhausted its budget while the host was escalating the trap and
+the host reported the budget failure instead of the P-256 one.
+`scenarioSpec.headroom` lets one scenario override the multiplier, and K's value
+is measured rather than guessed: at the default 6 the recording pass supplied
+2,774,226 instructions against a measured requirement of 3,454,949.
+
 The credential arm reported for each scenario is read back off the envelope that
 was actually submitted, by decoding it again, rather than assumed from what the
 test meant to build.
@@ -99,16 +117,17 @@ The tests are split by role rather than kept in one file:
 | `scenario_c_test.go` | Scenario C, the multisig account setup, and the single-signature control. |
 | `scenario_de_test.go` | Scenarios D and E and the delegates flow that wraps, signs per address, and submits. Scenarios F to I call the same flow. |
 | `scenario_fghi_test.go` | Scenarios F to I: the two session-key scenarios and the two threshold scenarios, each asserting the contract's own error code where it expects a refusal. |
+| `scenario_jk_test.go` | Scenarios J and K: the passkey-wallet flow, the P-256 credential key, and the signer built from `NewPasskeySigner` with `SignSecp256r1` and `Secp256r1SignatureScVal`. |
 | `deploy_test.go` | Uploading a fixture's wasm, instantiating it with that fixture's constructor arguments, and funding a contract with XLM. Holds the `ScVal` encoders the fixtures' constructors need. |
 | `results_test.go` | `TestMain` and the writer that produces `RESULTS.md` from a complete run. |
 
 ## The fixture contracts
 
-Three contracts, all custom accounts, each existing only so a scenario has
-something to authenticate against. All three are deliberately not products: no
-policies, no admin functions, no upgradability, and no way to change the key set
-after construction. Do not deploy them to mainnet or use them as smart-account
-starting points.
+Five contracts in the workspace, plus one separate source fixture, each exist
+to exercise a narrow authentication or policy path. None is audited or
+feature-complete; do not deploy them to mainnet or use them as smart-account
+starting points. See [Contract Fixtures](../docs/FIXTURES.md) for the paths
+each one exercises and the limits of its test coverage.
 
 - **`contracts/modular-account`** carries no signature of its own and authorizes
   purely by forwarding to CAP-71 delegated signers. Scenarios D and E.
@@ -117,9 +136,16 @@ starting points.
 - **`contracts/threshold-account`** requires M of its N registered signers before
   it authenticates anything. Scenarios H and I.
 - **`contracts/policy-account`** enforces per-period spending limits by inspecting invocation arguments within `__check_auth`.
+- **`contracts/passkey-wallet`** registers a P-256 (secp256r1) credential public
+  key at construction and verifies an ES256 signature over the authorization
+  payload inside `__check_auth`. Scenarios J and K.
+- **`contracts/social-recovery`** exercises guardian-authorized signer rotation
+  after a timelock. It is not in the contract workspace and has no live e2e
+  scenario; its narrower coverage is described in the fixture guide.
 
-Each has its own unit tests: `cargo test -p modular-account`,
-`cargo test -p session-keys`, `cargo test -p threshold-account`.
+Workspace fixtures have unit tests: `cargo test -p modular-account`,
+`cargo test -p session-keys`, `cargo test -p threshold-account`,
+`cargo test -p policy-account`, and `cargo test -p passkey-wallet`.
 
 ### The two clocks in the session-key fixture
 
@@ -153,8 +179,8 @@ unsorted delegates before the contract runs
 
 ## RESULTS.md
 
-`RESULTS.md` is written by a run, never by hand. It is only written when all ten
-scenarios ran in the same invocation, so it cannot be a partial record of a
+`RESULTS.md` is written by a run, never by hand. It is only written when all
+twelve scenarios ran in the same invocation, so it cannot be a partial record of a
 single-scenario run. It carries the date, the network and protocol version, and
 for every scenario the transaction hash, the ledger, the credential arm observed
 on the submitted envelope, an explorer link, and the raw host error verbatim

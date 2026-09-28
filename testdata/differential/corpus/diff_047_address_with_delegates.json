@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "diff_047_address_with_delegates",
+  "generator": "cmd/difffuzz",
+  "seed": 20260927,
+  "index": 47,
+  "credential_arm": "address_with_delegates",
+  "network_passphrase": "soroauth differential fuzzing network",
+  "valid_until_ledger": 4537262,
+  "unsigned_entry_xdr": "AAAAAwAAAAAAAAAAz2hXqwckEUYT/LSxF7pKh3wZX2QtlxxPXN99zaEnDc4Mz9sJhhhr2gBFO64AAAABAAAAAQAAAAHbTdGtGxvJ50tkZ4yCzaNUDZdAiXRQQ0++LLHn1D9kxgAAAAEAAAAAAAAAAAAAAAGz/XrpTvU4d9WttVYl8yQM+EuCN/mmeD3Nm2200pGLuQAAAARzd2FwAAAAAgAAAAEAAAAEWnnLpgAAAAA=",
+  "preimage_xdr": "AAAACrzX/kddJmSFt4ub0RtO7saf63Kl7m1VGBU8q0qUqqlsDM/bCYYYa9oARTuuAAAAAAAAAADPaFerByQRRhP8tLEXukqHfBlfZC2XHE9c333NoScNzgAAAAAAAAABs/166U71OHfVrbVWJfMkDPhLgjf5png9zZtttNKRi7kAAAAEc3dhcAAAAAIAAAABAAAABFp5y6YAAAAA",
+  "payload_hex": "06de2648bd033e21e8938976335ad7d7f10f123e9bd46acbc6bfc0e6f2c9fb4b"
+}

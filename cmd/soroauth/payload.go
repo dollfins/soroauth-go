@@ -86,7 +86,7 @@ func runPayloadWithStdin(args []string, stdout, stderr io.Writer, getenv func(st
 	validUntil := flags.Uint("valid-until", 0, "the last ledger at which the signature is valid")
 	validFor := flags.Uint64("valid-for", 0, "the signature lifetime in ledgers, resolved against the current ledger (needs --rpc-url)")
 	rpcURL := flags.String("rpc-url", "", "RPC endpoint used to resolve --valid-for (default $SOROAUTH_RPC_URL)")
-	networkFlag := flags.String("network", "", "testnet, public, or a literal network passphrase")
+	networkFlag := flags.String("network", "", "testnet, futurenet, public, or a literal network passphrase")
 	jsonFlag := flags.Bool("json", false, "output as JSON")
 
 	if err := flags.Parse(args); err != nil {

@@ -3,7 +3,9 @@ package soroauth
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/stellar/go-stellar-sdk/keypair"
@@ -238,4 +240,47 @@ func ExampleWithRetry() {
 	fmt.Println("retry signer configured")
 
 	// Output: retry signer configured
+}
+
+// ExampleExpirationAfter turns a lifetime in ledgers into the absolute ledger
+// number an entry must carry, and shows the two refusals that keep a long
+// lifetime from turning into an expiration in the past.
+//
+// Everything here is fixed so the output is stable, which for this function is
+// the whole input: ExpirationAfter takes two integers and touches no key, no
+// nonce and no network, so there is nothing a deterministic-key scheme would
+// apply to (the values a caller passes usually come from the network's latest
+// ledger). The example deliberately uses small round numbers rather than a
+// real network's, because the sum is network-independent — what the network
+// constrains is the upper bound this function cannot know, documented on the
+// function itself.
+func ExampleExpirationAfter() {
+	const latestLedger = 1_234_567
+
+	for _, ledgers := range []uint32{1, 720} {
+		expiration, err := ExpirationAfter(latestLedger, ledgers)
+		if err != nil {
+			// The only errors are refusals, so this cannot be a transport
+			// failure or anything else worth retrying.
+			fmt.Println("refused:", err)
+			return
+		}
+		fmt.Printf("latest=%d +%d -> %d\n", latestLedger, ledgers, expiration)
+	}
+
+	// A zero lifetime would expire at the current ledger, which the host
+	// treats as already expired, and a sum that overflows would wrap into the
+	// past. Both are refused rather than quietly produced.
+	if _, err := ExpirationAfter(latestLedger, 0); errors.Is(err, ErrInvalidExpiration) {
+		fmt.Println("zero ledgers refused")
+	}
+	if _, err := ExpirationAfter(math.MaxUint32, 1); errors.Is(err, ErrInvalidExpiration) {
+		fmt.Println("overflow refused")
+	}
+
+	// Output:
+	// latest=1234567 +1 -> 1234568
+	// latest=1234567 +720 -> 1235287
+	// zero ledgers refused
+	// overflow refused
 }

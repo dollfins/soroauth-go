@@ -2,15 +2,18 @@
   "name": "soroauth-vector-gen",
   "version": "0.0.0",
   "private": true,
-  "description": "Golden-vector generator for soroauth-go. @stellar/stellar-sdk is the reference implementation the Go library is proven against, byte for byte.",
+  "description": "Golden-vector generators for soroauth-go. @stellar/stellar-sdk is the reference for the authorization-entry vectors; smart-account-kit is the reference for the passkey signature-shape vectors.",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
   },
   "scripts": {
-    "gen": "node gen.mjs"
+    "gen": "node gen.mjs",
+    "gen:passkey": "node gen-passkey.mjs",
+    "gen:all": "node gen.mjs && node gen-passkey.mjs"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "17.1.0"
+    "@stellar/stellar-sdk": "17.1.0",
+    "smart-account-kit": "0.8.0"
   }
 }

@@ -95,6 +95,21 @@ type scenarioSpec struct {
 	// pass with rejectionHeadroom, so the transaction reaches the real host
 	// and is refused there, after fees.
 	expectFailure bool
+
+	// headroom overrides the multiplier applied to the recording pass's
+	// instruction budget and resource fee. Zero means the default from
+	// submissionHeadroom.
+	//
+	// It exists for a refusal whose cost is not the one the default was
+	// measured against. rejectionHeadroom is sized for a contract that
+	// returns an error, where the work the recording pass missed is one
+	// __check_auth call. Scenario K's refusal happens inside the host's own
+	// secp256r1 verification, and paying for that verification is itself
+	// most of the cost: at the default multiplier the submission exhausted
+	// its instruction budget while the host was escalating the trap, and the
+	// host reported the budget failure rather than the P-256 one. The value
+	// is measured, not guessed; see e2e/README.md.
+	headroom uint32
 }
 
 // runScenario is the one runner every scenario uses: record, sign with
@@ -137,7 +152,10 @@ func runScenario(t *testing.T, h *harness, spec scenarioSpec) submission {
 		enforceTx := h.build(t, h.account(t, spec.payer.Address()), spec.op)
 		sim = h.simulate(t, enforceTx, rpc.AuthModeEnforce, false)
 	}
-	headroom := submissionHeadroom(spec.expectFailure)
+	headroom := spec.headroom
+	if headroom == 0 {
+		headroom = submissionHeadroom(spec.expectFailure)
+	}
 
 	// 4. assemble with that pass's resources — the Go SDK has no
 	// assembleTransaction, so harness.assembleWithHeadroom attaches the

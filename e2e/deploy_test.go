@@ -190,6 +190,20 @@ func (h *harness) deployPolicyAccount(
 	})
 }
 
+// deployPasskeyWallet uploads the passkey-wallet fixture and instantiates it
+// with the uncompressed SEC-1 P-256 credential public key it will authenticate.
+func (h *harness) deployPasskeyWallet(t *testing.T, deployer *keypair.Full, publicKey []byte) deployment {
+	t.Helper()
+	return h.deployFixture(t, deployer, "passkey_wallet", []xdr.ScVal{scBytesVal(publicKey)})
+}
+
+// scBytesVal wraps a byte slice as an ScvBytes argument, the type the
+// passkey-wallet constructor takes its credential public key as.
+func scBytesVal(value []byte) xdr.ScVal {
+	bytes := xdr.ScBytes(value)
+	return xdr.ScVal{Type: xdr.ScValTypeScvBytes, Bytes: &bytes}
+}
+
 // scSymbolVal wraps a symbol as an ScVal, the type an ScMap's keys must use.
 func scSymbolVal(symbol string) xdr.ScVal {
 	value := xdr.ScSymbol(symbol)

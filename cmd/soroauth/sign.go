@@ -91,7 +91,7 @@ func runSignWithStdin(args []string, stdout, stderr io.Writer, getenv func(strin
 	validUntil := flags.Uint("valid-until", 0, "the last ledger at which the signature is valid")
 	validFor := flags.Uint64("valid-for", 0, "the signature lifetime in ledgers, resolved against the current ledger (needs --rpc-url)")
 	rpcURL := flags.String("rpc-url", "", "RPC endpoint used to resolve --valid-for (default $SOROAUTH_RPC_URL)")
-	networkFlag := flags.String("network", "", "testnet, public, or a literal network passphrase")
+	networkFlag := flags.String("network", "", "testnet, futurenet, public, or a literal network passphrase")
 	secretEnv := flags.String("secret-env", "", "name of the environment variable holding the signing seed (S…)")
 	assertionFlag := flags.String("assertion", "", "path to a WebAuthn assertion JSON file, or - for stdin")
 	forAddress := flags.String("for", "", "credential node to sign, when it is not the signer's own address")

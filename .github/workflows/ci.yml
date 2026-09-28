@@ -96,10 +96,26 @@ jobs:
         working-directory: testdata/gen
         run: node gen.mjs
 
+      # The passkey vectors have a different reference implementation
+      # (smart-account-kit, for the signature shape @stellar/stellar-sdk does
+      # not define) so they have their own generator. It installs from the same
+      # lockfile as the step above, and writes under testdata/vectors, so the
+      # diff below covers it too.
+      - name: regenerate the passkey vectors
+        working-directory: testdata/gen
+        run: node gen-passkey.mjs
+
       # The vectors are generated, committed artefacts. If regenerating them
       # changes anything, then either someone edited a vector by hand or the
       # reference implementation moved, and in both cases the committed
       # evidence no longer says what it claims to.
+      # The browser demo (#55) needs a browser, an authenticator and a passkey
+      # wallet contract, none of which exist here, so it cannot run end to end
+      # in CI. This runs its logic against the same pinned SDK the install step
+      # above produced, which is what keeps the demo's SDK calls honest.
+      - name: check the browser demo against the pinned sdk
+        run: node examples/browser-passkey/app.test.mjs
+
       - name: fail if the committed vectors changed
         run: |
           if ! git diff --exit-code testdata/vectors; then

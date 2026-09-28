@@ -561,6 +561,205 @@ func TestAuthorizeAllWithDelegatePlansUnmatchedAddressErrors(t *testing.T) {
 	}
 }
 
+// TestAuthorizeAllErrorsNameIndexAndAddress drives every reachable AuthorizeAll
+// failure path with the failing entry at index 1, behind one entry that signs
+// fine, so the index in the message is proven rather than merely present.
+// Each error must name the batch index and the address — or, where no address
+// exists, the most specific locator available (the credentials type, the arm,
+// or a placeholder) — while errors.Is still matches the sentinel.
+//
+// Two paths cannot fail here no matter the input, and so have no failure
+// test: the RequireAllSigned re-walk repeats a traversal the main loop
+// already passed over the same structure, and the cancelled-context refusal
+// fires before any entry is examined (covered by
+// TestAuthorizeAllHonoursContextCancellation). The unmatched-plan refusal
+// names its address but has no entry, so no index exists to name.
+func TestAuthorizeAllErrorsNameIndexAndAddress(t *testing.T) {
+	const goodLabel = "soroauth-batch-idx-good"
+
+	// runBatch places failing at index 1 behind a healthy entry that signs
+	// fine, and returns the error for the subtest to assert over.
+	runBatch := func(t *testing.T, failing xdr.SorobanAuthorizationEntry, signers []Signer, opts ...AuthorizeAllOption) (string, []xdr.SorobanAuthorizationEntry, error) {
+		t.Helper()
+		entries := []xdr.SorobanAuthorizationEntry{
+			entryForSigner(t, goodLabel, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 1),
+			failing,
+		}
+		got, err := AuthorizeAll(context.Background(), entries, signers,
+			testValidUntilLedger, network.TestNetworkPassphrase, opts...)
+		if err == nil {
+			return "", got, nil
+		}
+		return err.Error(), got, err
+	}
+
+	// wantError is the shared assertion: the message names the index and the
+	// address (or its fallback label), the sentinel still matches, and
+	// nothing partial is returned.
+	wantError := func(t *testing.T, msg string, got []xdr.SorobanAuthorizationEntry, err error, sentinel error, parts ...string) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("AuthorizeAll succeeded, returning %d entries", len(got))
+		}
+		for _, part := range parts {
+			if !strings.Contains(msg, part) {
+				t.Errorf("error %q does not contain %q", msg, part)
+			}
+		}
+		if sentinel != nil && !errors.Is(err, sentinel) {
+			t.Errorf("error %q does not match %v", msg, sentinel)
+		}
+		if got != nil {
+			t.Errorf("AuthorizeAll returned %d entries alongside an error, want nil", len(got))
+		}
+	}
+
+	goodSigner := NewEd25519Signer(testKeypair(t, goodLabel))
+
+	t.Run("unsupported credentials type", func(t *testing.T) {
+		bad := entryForArm(t, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 2)
+		bad.Credentials.Type = xdr.SorobanCredentialsType(99)
+
+		msg, got, err := runBatch(t, bad, []Signer{goodSigner})
+		wantError(t, msg, got, err, ErrUnsupportedCredentials,
+			"entry 1 (credentials type 99)", ErrUnsupportedCredentials.Error())
+	})
+
+	t.Run("empty credentials arm", func(t *testing.T) {
+		bad := entryForArm(t, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 2)
+		bad.Credentials.AddressV2 = nil
+
+		msg, got, err := runBatch(t, bad, []Signer{goodSigner})
+		wantError(t, msg, got, err, nil,
+			"entry 1 (credentials type 2)", "address_v2 credentials arm is empty")
+	})
+
+	t.Run("unformattable address", func(t *testing.T) {
+		bad := entryForSigner(t, "soroauth-batch-idx-badaddr", xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 2)
+		credentials, cerr := addressCredentials(bad.Credentials)
+		if cerr != nil {
+			t.Fatalf("reading credentials: %v", cerr)
+		}
+		// An account arm with no account id: present in XDR, but with
+		// nothing FormatAddress can render.
+		credentials.Address = xdr.ScAddress{Type: xdr.ScAddressTypeScAddressTypeAccount}
+
+		msg, got, err := runBatch(t, bad, []Signer{goodSigner})
+		wantError(t, msg, got, err, nil,
+			"entry 1 (<unformattable address>)", "account arm has no account id")
+	})
+
+	t.Run("source account copy failure", func(t *testing.T) {
+		bad := entryForArm(t, xdr.SorobanCredentialsTypeSorobanCredentialsSourceAccount, 2)
+		// An unknown function discriminant: the entry still reads as a
+		// source-account entry, but it cannot survive the copy's XDR
+		// round-trip, so the copy fails.
+		bad.RootInvocation.Function.Type = xdr.SorobanAuthorizedFunctionType(99)
+
+		msg, got, err := runBatch(t, bad, []Signer{goodSigner})
+		wantError(t, msg, got, err, nil, "entry 1 (source account)")
+	})
+
+	t.Run("delegate plan wrap failure", func(t *testing.T) {
+		const plannedLabel = "soroauth-batch-idx-planned"
+		bad := entryForSigner(t, plannedLabel, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 2)
+		plannedAddr := testKeypair(t, plannedLabel).Address()
+		delegateAddr := testKeypair(t, "soroauth-batch-idx-delegate").Address()
+
+		msg, got, err := runBatch(t, bad,
+			[]Signer{goodSigner, NewEd25519Signer(testKeypair(t, plannedLabel))},
+			WithDelegatePlans(map[string]DelegatePlan{
+				plannedAddr: {Delegates: []Delegate{
+					{Address: delegateAddr}, {Address: delegateAddr},
+				}},
+			}))
+		wantError(t, msg, got, err, ErrDuplicateDelegate,
+			"entry 1 ("+plannedAddr+"): delegate plan", ErrDuplicateDelegate.Error())
+	})
+
+	t.Run("signer failure", func(t *testing.T) {
+		const badLabel = "soroauth-batch-idx-bad"
+		bad := entryForSigner(t, badLabel, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 2)
+		badAddr := testKeypair(t, badLabel).Address()
+		signerError := errors.New("the delegate signer refused")
+
+		msg, got, err := runBatch(t, bad, []Signer{
+			goodSigner,
+			SignerFunc(badAddr,
+				func(context.Context, xdr.HashIdPreimage, [32]byte) (xdr.ScVal, error) {
+					return xdr.ScVal{}, signerError
+				}),
+		})
+		wantError(t, msg, got, err, signerError, "entry 1 ("+badAddr+"): signer "+badAddr)
+	})
+
+	t.Run("missing signer", func(t *testing.T) {
+		const absentLabel = "soroauth-batch-idx-absent"
+		bad := entryForSigner(t, absentLabel, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 2)
+		absentAddr := testKeypair(t, absentLabel).Address()
+
+		msg, got, err := runBatch(t, bad, []Signer{goodSigner})
+		wantError(t, msg, got, err, ErrMissingSigner,
+			"entry 1 ("+absentAddr+")", ErrMissingSigner.Error())
+	})
+
+	t.Run("delegate tree past the traversal limit", func(t *testing.T) {
+		const ownerLabel = "soroauth-batch-idx-deep"
+		base := entryForSigner(t, ownerLabel, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 2)
+		ownerAddr := testKeypair(t, ownerLabel).Address()
+		credentials, cerr := addressCredentials(base.Credentials)
+		if cerr != nil {
+			t.Fatalf("reading credentials: %v", cerr)
+		}
+		delegateAddr, perr := ParseAddress(testKeypair(t, "soroauth-batch-idx-deep-delegate").Address())
+		if perr != nil {
+			t.Fatalf("parsing the delegate address: %v", perr)
+		}
+		// A chain nested past MaxDecodeDepth, built by hand: WithDelegates
+		// would refuse it before AuthorizeAll ever saw it.
+		voidSig := xdr.ScVal{Type: xdr.ScValTypeScvVoid}
+		inner := xdr.SorobanDelegateSignature{Address: delegateAddr, Signature: voidSig}
+		for k := 0; k < MaxDecodeDepth+6; k++ {
+			inner = xdr.SorobanDelegateSignature{
+				Address:         delegateAddr,
+				Signature:       voidSig,
+				NestedDelegates: []xdr.SorobanDelegateSignature{inner},
+			}
+		}
+		bad := base
+		bad.Credentials = xdr.SorobanCredentials{
+			Type: xdr.SorobanCredentialsTypeSorobanCredentialsAddressWithDelegates,
+			AddressWithDelegates: &xdr.SorobanAddressCredentialsWithDelegates{
+				AddressCredentials: *credentials,
+				Delegates:          []xdr.SorobanDelegateSignature{inner},
+			},
+		}
+
+		msg, got, err := runBatch(t, bad,
+			[]Signer{goodSigner, NewEd25519Signer(testKeypair(t, ownerLabel))})
+		wantError(t, msg, got, err, ErrDecodeLimit,
+			"entry 1 ("+ownerAddr+")", ErrDecodeLimit.Error())
+	})
+
+	t.Run("unsigned node under RequireAllSigned", func(t *testing.T) {
+		owner := testKeypair(t, "soroauth-preimage-signer") // entryForArm's account
+		d1 := testKeypair(t, "soroauth-batch-idx-d1")
+		d2 := testKeypair(t, "soroauth-batch-idx-d2")
+		base := entryForArm(t, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 42)
+		delegated, derr := WithDelegates(base, testValidUntilLedger,
+			[]Delegate{{Address: d1.Address()}, {Address: d2.Address()}}, nil)
+		if derr != nil {
+			t.Fatalf("building the entry: %v", derr)
+		}
+
+		msg, got, err := runBatch(t, delegated,
+			[]Signer{goodSigner, NewEd25519Signer(owner), NewEd25519Signer(d1)}, // d2 never signs
+			RequireAllSigned())
+		wantError(t, msg, got, err, ErrUnsignedCredentialNode,
+			"entry 1 ("+d2.Address()+")", ErrUnsignedCredentialNode.Error())
+	})
+}
+
 func TestAuthorizeAllEmptyBatch(t *testing.T) {
 	got, err := AuthorizeAll(context.Background(), nil, nil,
 		testValidUntilLedger, network.TestNetworkPassphrase)
