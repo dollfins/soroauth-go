@@ -7,91 +7,62 @@ import (
 	"testing"
 
 	"github.com/stellar/go-stellar-sdk/keypair"
-	"github.com/stellar/go-stellar-sdk/txnbuild"
+	rpc "github.com/stellar/go-stellar-sdk/protocols/rpc"
 
 	"github.com/soroauth/soroauth-go"
+	"github.com/soroauth/soroauth-go/rpcflow"
 )
 
-// transferAmount is 1 XLM in stroops, the same constant the existing
-// scenarios all use.
-const transferAmount = 10_000_000
-
-// TestSignAndSubmitProvesTheRecordAndEnforcePasses runs, on live testnet,
-// the one call the issue asks for: an unsigned transaction, a set of
-// signers, one RPC client, and one returned submission. It asserts that the
-// record pass and the enforcing pass both ran (by checking the submitted
-// envelope carries the exact arms soroauth signed and a fee the host
-// accepted), that nothing was silently skipped, and that the submission
-// lands where the helper claimed to have sent it.
-func TestSignAndSubmitProvesTheRecordAndEnforcePasses(t *testing.T) {
+// TestSignAndSubmitProvesTheRecordAndEnforcePassesRunLive drives rpcflow's
+// whole flow against testnet: record, sign, enforce, assemble, sign the
+// envelope, send.
+//
+// What a live run adds over rpcflow's own unit tests is the host's judgement.
+// The unit tests prove the enforcing pass carries the signed entries and that
+// the submitted fee comes from that pass; they cannot prove the host accepts
+// the result. Only a real submission does that, because only the host decides
+// whether the fee covers the signatures it had to read.
+func TestSignAndSubmitProvesTheRecordAndEnforcePassesRunLive(t *testing.T) {
 	h := newHarness(t)
-	payer := h.newAccount(t, "payer")
-	signer := h.newAccount(t, "signer")
-	to := h.newAccount(t, "recipient")
+	payer := h.newAccount(t, "rpcflow payer")
+	signer := h.newAccount(t, "rpcflow signer")
+	to := h.newAccount(t, "rpcflow recipient")
 
-	op := transferOp(t, scAddressOf(t, signer.Address()), scAddressOf(t, to.Address()), transferAmount, payer.Address())
+	op := h.transferOp(t,
+		scAddressOf(t, signer.Address()),
+		scAddressOf(t, to.Address()),
+		transferAmount,
+		payer.Address(),
+	)
 
-	sub, err := soroauth.SignAndSubmit(context.Background(), h.buildTransaction(t, payer, op), []soroauth.Signer{soroauth.NewEd25519Signer(signer)},
-		h.passphrase, h.client)
-	if err != nil {
-		t.Fatalf("SignAndSubmit returned an unexpected error: %v", err)
-	}
-
-	if sub.Status != rpc.TransactionStatusSuccess {
-		t.Fatalf("transaction rejected on-chain (status %s): %s", sub.Status, sub.RawError)
-	}
-
-	// The record pass must have signed an address credential for the
-	// authorised account (it is the only arm the transfer needs), and the
-	// enforcing pass must have produced a fee the host accepted, so a
-	// successful submission proves both passes ran and none was skipped.
-	if sub.Arm != "SorobanCredentialsTypeSorobanCredentialsAddress" {
-		t.Errorf("submitted envelope carried arm %q, want the address arm soroauth signed", sub.Arm)
-	}
-}
-
-// TestSignAndSubmitHandlesResourceFee exercises the explicit assembly step:
-// a transaction whose record pass under-counts is assembled with the
-// enforcing pass's padded fee and submitted. If the helper skipped the
-// enforcing pass, the fee it produced would be too small and the host
-// would refuse the transaction after charging fees. That is the silent
-// skip the issue exists to stop, and this test asserts it did not happen.
-func TestSignAndSubmitHandlesResourceFee(t *testing.T) {
-	h := newHarness(t)
-	payer := h.newAccount(t, "payer")
-	signer := h.newAccount(t, "signer")
-	to := h.newAccount(t, "recipient")
-
-	op := transferOp(t, scAddressOf(t, signer.Address()), scAddressOf(t, to.Address()), transferAmount, payer.Address())
-
-	sub, err := soroauth.SignAndSubmit(context.Background(), h.buildTransaction(t, payer, op), []soroauth.Signer{soroauth.NewEd25519Signer(signer)},
-		h.passphrase, h.client)
-	if err != nil {
-		t.Fatalf("SignAndSubmit returned an unexpected error: %v", err)
-	}
-
-	if sub.Status != rpc.TransactionStatusSuccess {
-		t.Fatalf("transaction rejected on-chain (status %s): %s", sub.Status, sub.RawError)
-	}
-}
-
-// buildTransaction builds the unsigned transaction the helper signs and
-// submits, with a single InvokeHostFunction from the signer to the
-// recipient.
-func (h *harness) buildTransaction(t *testing.T, payer *keypair.Full, op txnbuild.InvokeHostFunction) *txnbuild.Transaction {
-	t.Helper()
-
-	source := h.account(t, payer.Address())
-
-	tx, err := txnbuild.NewTransaction(txnbuild.TransactionParams{
-		SourceAccount:        source,
-		IncrementSequenceNum: true,
-		Operations:           []txnbuild.Operation{&op},
-		BaseFee:              txnbuild.MinBaseFee * 100,
-		Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewInfiniteTimeout()},
+	sub, err := rpcflow.SignAndSubmit(context.Background(), rpcflow.Params{
+		Source:    h.account(t, payer.Address()),
+		Operation: op,
+		// The entry signer and the envelope signer are different accounts on
+		// purpose: that is the case the two-pass flow exists for. If they were
+		// the same, the source-account arm would cover it and no entry would
+		// need signing at all.
+		Signers:           []soroauth.Signer{soroauth.NewEd25519Signer(signer)},
+		EnvelopeSigners:   []*keypair.Full{payer},
+		NetworkPassphrase: h.passphrase,
+		Client:            h.client,
 	})
 	if err != nil {
-		t.Fatalf("building the transaction: %v", err)
+		t.Fatalf("SignAndSubmit returned an unexpected error: %v", err)
 	}
-	return tx
+	if sub.Status != rpc.TransactionStatusSuccess {
+		t.Fatalf("the host rejected the transaction (status %s): %s", sub.Status, sub.RawError)
+	}
+
+	// The arm is read back off the submitted envelope, not assumed from what
+	// was built, so this asserts what actually went to the network.
+	if want := "SorobanCredentialsTypeSorobanCredentialsAddress"; sub.Arm != want {
+		t.Errorf("the submitted envelope carried arm %q, want %q", sub.Arm, want)
+	}
+	if sub.Ledger == 0 {
+		t.Error("the transaction succeeded but reported no ledger")
+	}
+
+	t.Logf("scenario rpcflow: hash=%s ledger=%d arm=%s", sub.Hash, sub.Ledger, sub.Arm)
+	t.Logf("https://stellar.expert/explorer/testnet/tx/%s", sub.Hash)
 }
