@@ -1,0 +1,55 @@
+# golangci-lint configuration (issue #153).
+#
+# The bar before this was `gofmt -l .` plus `go vet ./...` in CI. That catches
+# formatting and the vet analyzers, but not a whole class of defects a reviewer
+# would otherwise have to spot by eye: an ignored error return, a value assigned
+# and never read, a dead identifier, an HTTP response body left open.
+#
+# The set is deliberately small and every linter in it is on for a reason. The
+# rule for adding one is the rule for this file: it must be something the
+# project would actually fix, not a style preference. A linter whose findings
+# are all suppressed here should be deleted rather than kept as decoration.
+#
+# The `standard` set is golangci-lint's default (errcheck, govet, ineffassign,
+# staticcheck, unused); it is pinned explicitly rather than left to the tool's
+# default so a future golangci-lint default change cannot silently widen or
+# narrow the gate. On top of it:
+#
+#   bodyclose      - an unclosed resp.Body leaks a connection; the CLI's
+#                    doctor command and the RPC path both make HTTP requests.
+#   errorlint      - this library's contract is errors.Is/errors.As over
+#                    wrapped sentinels (see errors.go), so a comparison or a
+#                    %v that should be %w is a real defect.
+#   misspell       - doc comments carry protocol claims; a misspelled term is
+#                    what a reader trips over when checking them.
+#
+# Not enabled, on purpose:
+#   goimports       - would regroup the stdlib/third-party/local import blocks
+#                     the repository already keeps consistent by hand.
+#   gocyclo/funlen  - this code's control flow is protocol-shaped; a length
+#                     limit would push correct code into less readable forms.
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+
+  settings:
+    errcheck:
+      # The CLI writes its results and its usage to stdout/stderr. A failed
+      # write to a closed pipe does not change the outcome -- the process exit
+      # code already reflects whether the command succeeded -- and a
+      # flag.Usage callback has nowhere to return an error to. This is one
+      # documented class of exclusion rather than an `_ =` on every print.
+      # Checked-error findings outside it are fixed, not excluded.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
+
+formatters:
+  enable:
+    - gofmt

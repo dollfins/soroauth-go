@@ -1,0 +1,184 @@
+# Cross-implementation parity suites: every way this repository has of proving
+# that soroauth and the references it is checked against agree on the signed
+# bytes.
+#
+# The matrix is the four suites below. Each is pinned to a named toolchain (the
+# JS SDK in testdata/gen and testdata/differential, the Python SDK in
+# testdata/parity-python, the Rust crate in testdata/parity-rust), because a
+# parity result is only evidence when the reference that produced it is the
+# reference named in the repository.
+#
+# When it runs:
+#   - on push to main, when a vector, a harness or the library that produces
+#     them changes;
+#   - weekly, so a reference dependency that moves under us is noticed without
+#     anyone running anything;
+#   - on a published release, so the claims a release makes are checked against
+#     the code being released;
+#   - on demand.
+#
+# It does not run on pull requests: those carry only the checks the branch
+# ruleset requires, so a contributor sees two checks rather than a wall of
+# them. A failure here names the suite in its job name and the case in its log:
+# each verifier prints `FAIL <case>: <what differed>` and lists the two byte
+# strings, and the case file in the repository is the reproducer.
+name: ci / parity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'testdata/vectors/**'
+      - 'testdata/gen/**'
+      - 'testdata/parity-python/**'
+      - 'testdata/parity-rust/**'
+      - 'testdata/differential/**'
+      - 'cmd/difffuzz/**'
+      - '*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+  schedule:
+    # Weekly, Monday 07:00 UTC, staggered behind the link check (06:00) and the
+    # spell check (06:30) so the runners are not all queued at once.
+    - cron: '0 7 * * 1'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The JS drift check. It is in this matrix rather than repeated here from
+  # ci.yml because this job's audience is the parity story: the golden vectors
+  # must regenerate from the pinned JS SDK unchanged, or the committed evidence
+  # no longer says what it claims to.
+  js-drift:
+    name: js sdk vector drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          # @stellar/stellar-sdk@17.1.0 declares engines node >=22.12.0.
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: testdata/gen/package-lock.json
+      # npm ci installs exactly the committed lockfile and fails if
+      # package.json and the lockfile disagree, so the reference build cannot
+      # drift without this step noticing.
+      - name: install the pinned reference sdk
+        working-directory: testdata/gen
+        run: npm ci
+      - name: regenerate the vectors
+        working-directory: testdata/gen
+        run: node gen.mjs
+      - name: fail if the committed vectors changed
+        run: |
+          if ! git diff --exit-code testdata/vectors; then
+            echo
+            echo "The committed golden vectors differ from freshly generated ones."
+            echo "Vectors are never edited by hand. Regenerate them with:"
+            echo "  cd testdata/gen && npm ci && node gen.mjs"
+            echo "and commit the result, or investigate why the reference output moved."
+            exit 1
+          fi
+
+  python-parity:
+    name: python sdk parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The runner's system python is used on purpose: the harness pins the one
+      # dependency it needs in requirements.txt, and pulling in a toolchain
+      # action would be one more thing to keep pinned for no benefit.
+      - name: install the pinned reference sdk and run the parity harness
+        run: |
+          python3 -m venv .venv-parity
+          . .venv-parity/bin/activate
+          pip install -r testdata/parity-python/requirements.txt
+          python3 testdata/parity-python/parity.py
+          python3 testdata/parity-python/test_parity.py
+
+  rust-parity:
+    name: rust xdr parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The runner's preinstalled rustup is used on purpose: rust-toolchain.toml
+      # pins the exact toolchain (1.93.0), so no toolchain action needs a SHA
+      # pin of its own.
+      - name: run the parity harness and its tests
+        working-directory: testdata/parity-rust
+        # --locked makes the committed Cargo.lock authoritative: the job fails
+        # rather than silently re-resolving to a different stellar-xdr.
+        run: |
+          cargo test --locked
+          cargo run --locked --bin parity
+
+  # Differential fuzzing: cmd/difffuzz generates a deterministic corpus of
+  # random entries across every credentials arm and records this library's
+  # preimage and payload for each; the JS verifier and the Python parity
+  # harness then have to reproduce every one. All three agreeing is the claim;
+  # any disagreement is a release blocker. See testdata/differential/README.md.
+  differential:
+    name: differential fuzzing (go, js, python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: testdata/differential/package-lock.json
+
+      # The corpus is generated and committed, so regenerating it must change
+      # nothing. A diff means either a case was hand-edited or the recording
+      # moved, and in both cases the committed corpus no longer describes this
+      # library. This is the same guard the golden vectors have.
+      - name: regenerate the corpus and fail if it changed
+        run: |
+          go run ./cmd/difffuzz
+          if ! git diff --exit-code testdata/differential/corpus; then
+            echo
+            echo "The committed differential corpus differs from freshly generated cases."
+            echo "Cases are never edited by hand. Regenerate them with:"
+            echo "  go run ./cmd/difffuzz"
+            echo "and commit the result, or investigate why the recording moved."
+            exit 1
+          fi
+
+      # The Go side of the comparison. It also runs in `go test ./...`, and is
+      # repeated here so this job's log says on its own that all three sides
+      # agreed.
+      - name: go side recomputes every case
+        run: go test -run TestDifferential -v .
+
+      - name: install the pinned js reference
+        working-directory: testdata/differential
+        run: npm ci
+
+      - name: js recomputes every case
+        working-directory: testdata/differential
+        run: node verify.mjs
+
+      - name: install the pinned python reference
+        run: |
+          python3 -m venv .venv-parity
+          . .venv-parity/bin/activate
+          pip install -r testdata/parity-python/requirements.txt
+
+      - name: python recomputes every case
+        run: |
+          . .venv-parity/bin/activate
+          python3 testdata/parity-python/parity.py --vectors testdata/differential/corpus
+          # Frozen divergences are checked too. The directory is empty until
+          # there is one, and an empty directory is not a failure.
+          if ls testdata/differential/regressions/*.json >/dev/null 2>&1; then
+            python3 testdata/parity-python/parity.py --vectors testdata/differential/regressions
+          fi

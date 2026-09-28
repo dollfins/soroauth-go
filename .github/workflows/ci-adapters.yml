@@ -1,0 +1,80 @@
+# Advisory checks for the out-of-tree adapter modules.
+#
+# Runs when an adapter changes, or when the library they build against does.
+name: ci / adapters
+
+on:
+  # Advisory checks do not run on pull requests. Only the two jobs the
+  # branch ruleset requires do, so a contributor sees two checks and not a
+  # wall of them. These run when the change reaches main, and can be run
+  # by hand from the Actions tab at any time.
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/**'
+      - '*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adapter:
+    name: wallet sdk adapter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache-dependency-path: adapters/walletsdk/go.sum
+      - name: gofmt
+        working-directory: adapters/walletsdk
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: vet
+        working-directory: adapters/walletsdk
+        run: go vet ./...
+      # -race for the same reason as the root test job: the adapter verifies its
+      # own signatures, and the test suite is what says the signed bytes are a
+      # real ed25519 signature rather than a shape it agrees with itself about.
+      - name: test
+        working-directory: adapters/walletsdk
+        run: go test -race ./...
+  gcpkms:
+    name: gcp kms adapter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache-dependency-path: adapters/gcpkms/go.sum
+      - name: gofmt
+        working-directory: adapters/gcpkms
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: vet
+        working-directory: adapters/gcpkms
+        run: go vet ./...
+      # -race because the signer verifies its own output; the test suite is what
+      # says the signed bytes are a real ed25519 signature, not a shape the code
+      # agrees with itself about.
+      - name: test
+        working-directory: adapters/gcpkms
+        run: go test -race ./...

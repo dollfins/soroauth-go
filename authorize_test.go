@@ -12,6 +12,7 @@ import (
 
 	"github.com/stellar/go-stellar-sdk/keypair"
 	"github.com/stellar/go-stellar-sdk/network"
+	"github.com/stellar/go-stellar-sdk/strkey"
 	"github.com/stellar/go-stellar-sdk/xdr"
 )
 
@@ -434,7 +435,17 @@ func ExampleAllowResign() {
 		fmt.Println("error:", err)
 		return
 	}
-	contract, err := ParseAddress(testContractAddress(&testing.T{}, "soroauth-example-contract"))
+	// Derived inline rather than through testContractAddress: an example has no
+	// *testing.T, and a &testing.T{} literal is an uninitialised struct whose
+	// Fatalf panics instead of reporting. The example's own error handling
+	// below is what it should use anyway.
+	contractSeed := sha256.Sum256([]byte("soroauth-example-contract"))
+	contractStrkey, err := strkey.Encode(strkey.VersionByteContract, contractSeed[:])
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	contract, err := ParseAddress(contractStrkey)
 	if err != nil {
 		fmt.Println("error:", err)
 		return
@@ -857,6 +868,75 @@ func TestAuthorizeEntryDoesNotCallTheSignerWhenNothingMatches(t *testing.T) {
 }
 
 // keypairForAddress recovers the deterministic test keypair behind an address.
+func TestAuthorizeEntryExpirationProperty(t *testing.T) {
+	armTypes := []xdr.SorobanCredentialsType{
+		xdr.SorobanCredentialsTypeSorobanCredentialsAddress,
+		xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2,
+		xdr.SorobanCredentialsTypeSorobanCredentialsAddressWithDelegates,
+	}
+
+	expirings := []uint32{0, 1, 42, 1234567, 4294967295}
+	Depths := []int{0, 1, 2, 3}
+
+	for _, armType := range armTypes {
+		for _, validUntil := range expirings {
+			if validUntil == 0 {
+				continue
+			}
+			for _, depth := range Depths {
+				name := fmt.Sprintf("arm=%v/exp=%d/depth=%d", armType, validUntil, depth)
+				t.Run(name, func(t *testing.T) {
+					var entry xdr.SorobanAuthorizationEntry
+					var addresses []string
+
+					switch armType {
+					case xdr.SorobanCredentialsTypeSorobanCredentialsAddress,
+						xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2:
+						entry = entryForArm(t, armType, 123)
+						addresses = []string{testKeypair(t, "soroauth-preimage-signer").Address()}
+
+					case xdr.SorobanCredentialsTypeSorobanCredentialsAddressWithDelegates:
+						base := entryForArm(t, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 123)
+						var delegates []Delegate
+						curr := &delegates
+						for i := 0; i < depth; i++ {
+							addr := testKeypair(t, fmt.Sprintf("soroauth-prop-delegate-%d", i)).Address()
+							addresses = append(addresses, addr)
+							nextDelegates := []Delegate{{Address: addr}}
+							*curr = nextDelegates
+							curr = &(*curr)[0].Nested
+						}
+
+						accountAddr := testKeypair(t, "soroauth-preimage-signer").Address()
+						addresses = append([]string{accountAddr}, addresses...)
+
+						var err error
+						entry, err = WithDelegates(base, validUntil, delegates, nil)
+						if err != nil {
+							t.Fatalf("WithDelegates: %v", err)
+						}
+					}
+
+					// Sign all addresses present in the entry
+					currentEntry := entry
+					for _, addr := range addresses {
+						kp := keypairForAddress(t, addr)
+						signer := NewEd25519Signer(kp)
+						var err error
+						currentEntry, err = AuthorizeEntry(context.Background(), currentEntry, signer, validUntil, network.TestNetworkPassphrase, ForAddress(addr))
+						if err != nil {
+							t.Fatalf("AuthorizeEntry for %s: %v", addr, err)
+						}
+					}
+
+					// Verify signature and consistency for the signed entry
+					assertSignatureVerifies(t, currentEntry, validUntil, network.TestNetworkPassphrase)
+				})
+			}
+		}
+	}
+}
+
 func keypairForAddress(t *testing.T, address string) *keypair.Full {
 	t.Helper()
 	for _, label := range []string{
@@ -868,6 +948,9 @@ func keypairForAddress(t *testing.T, address string) *keypair.Full {
 		"soroauth-delegate-3",
 		"soroauth-delegate-nested-1",
 		"soroauth-delegate-nested-2",
+		"soroauth-prop-delegate-0",
+		"soroauth-prop-delegate-1",
+		"soroauth-prop-delegate-2",
 	} {
 		kp := testKeypair(t, label)
 		if kp.Address() == address {

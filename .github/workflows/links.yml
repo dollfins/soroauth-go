@@ -1,0 +1,88 @@
+name: links
+
+# The docs cross-link heavily and point at CAPs, rs-soroban-env and SDK pages
+# that move, so they are checked rather than trusted.
+#
+# This workflow does not run on pull requests. Pull requests are capped at the
+# three checks ci.yml reports, and a workflow that runs on pull_request adds a
+# row for every job it declares — an `if:`-gated job included, since a skipped
+# job still reports. So this runs on push to main, on a weekly schedule, and on
+# demand, the same shape as ci-go.yml and the other advisory workflows. A broken
+# internal link reaches main and is caught on the push, one commit later rather
+# than one review earlier.
+#
+# Two jobs, because the two kinds of link fail differently:
+#
+#   internal  links between files in this repository. Blocking, on every
+#             trigger: a relative link to a renamed or moved file is a defect
+#             this repository can fix.
+#   external  links out to the web. Scheduled and manual only, and never a
+#             gate: an external page moving, being reorganized, or
+#             rate-limiting an automated checker is not a regression in this
+#             project. The run still reports every broken link and the file it
+#             is in.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.md'
+      - 'lychee.toml'
+      - '.github/workflows/links.yml'
+  schedule:
+    # Weekly. External link rot is slow; a daily run would add noise, not
+    # information. Monday 06:00 UTC.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  internal:
+    name: internal links resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # --offline restricts this to links that point at files in the checkout,
+      # so it exercises HEAD-relative and relative Markdown links and anchors
+      # without touching the network. fail: true makes it the gate.
+      - name: check internal links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
+        with:
+          fail: true
+          args: --offline --include-fragments --no-progress --verbose './**/*.md'
+
+  external:
+    name: external links resolve (reported)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # fail: false on purpose. The job exists to report, not to gate; see the
+      # workflow header. lychee still writes every broken link, with the file
+      # and line it came from, to the report read by the step below.
+      - name: check all links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
+        with:
+          fail: false
+          output: lychee-external.md
+          args: --no-progress --verbose './**/*.md'
+
+      - name: publish the report to the run summary
+        run: |
+          echo '## External link report' >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          if [ -s lychee-external.md ]; then
+            cat lychee-external.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'lychee wrote no report file.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The report is also written to the job log, where it is searchable even
+      # if the summary is not read.
+      - name: print the report to the log
+        if: always()
+        run: cat lychee-external.md

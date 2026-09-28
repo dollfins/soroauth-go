@@ -4,14 +4,17 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
-	"reflect"
-
+	"github.com/soroauth/soroauth-go"
 	"github.com/stellar/go-stellar-sdk/strkey"
 	"github.com/stellar/go-stellar-sdk/xdr"
-
-	"github.com/soroauth/soroauth-go"
+	"reflect"
 )
 
+// isNilKeypair reports whether kp is nil, or holds a nil pointer.
+//
+// The second case matters: a nil *keypair.Full inside a non-nil interface is
+// not caught by a plain nil check, and every method on it would panic. Since
+// NewSigner has an error to return, it can refuse both.
 // Keypair is the signing and verification half of an ed25519 keypair, in the
 // shape a wallet SDK provides it.
 //

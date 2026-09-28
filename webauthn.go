@@ -1,6 +1,7 @@
 package soroauth
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -93,6 +94,29 @@ func (a *WebAuthnAssertion) UserPresent() bool {
 // the authenticator data.
 func (a *WebAuthnAssertion) UserVerified() bool {
 	return a.Flags()&flagUserVerified != 0
+}
+
+// SignedBytes returns the byte string the assertion's signature is computed
+// over: the authenticator data followed by SHA-256(clientDataJSON).
+//
+// WebAuthn Level 3 §6.1 defines exactly that concatenation as what a signature
+// covers, and §7.2 step 21 has the relying party hash it once more with the
+// credential's algorithm before verifying. For a passkey the algorithm is
+// ES256, so a caller verifies the assertion's DER signature over
+// SHA-256(SignedBytes()). Returning the unhashed concatenation rather than the
+// digest is deliberate: hashing is the verification step, and a caller that
+// wants to inspect what it is verifying should see the same bytes the
+// authenticator signed.
+//
+// It is a copy, so a caller cannot change the assertion through it.
+func (a *WebAuthnAssertion) SignedBytes() []byte {
+	if a == nil {
+		return nil
+	}
+	clientDataHash := sha256.Sum256(a.ClientDataJSON)
+	signed := make([]byte, 0, len(a.AuthenticatorData)+len(clientDataHash))
+	signed = append(signed, a.AuthenticatorData...)
+	return append(signed, clientDataHash[:]...)
 }
 
 // webAuthnAssertionJSON is the wire shape of a serialized PublicKeyCredential

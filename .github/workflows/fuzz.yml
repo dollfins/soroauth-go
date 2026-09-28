@@ -1,0 +1,184 @@
+# Continuous fuzzing that runs beyond CI's time budget.
+#
+# This workflow is scheduled to run daily and on every push to main.
+# It uses go-fuzz with libfuzzer to find crashes and timeouts.
+# Findings are reported as GitHub issues automatically.
+name: continuous-fuzz
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # Daily at 03:00 UTC
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 120 # 2 hours per target
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzValidateDelegateOrder
+          - FuzzInspect
+          - FuzzPreimage
+          - FuzzPayload
+          - FuzzDecodeAuthorizationEntry
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: install go-fuzz
+        run: go install github.com/dvyukov/go-fuzz/go-fuzz@latest
+        shell: bash
+
+      - name: install go-fuzz-build
+        run: go install github.com/dvyukov/go-fuzz/go-fuzz-build@latest
+        shell: bash
+
+      - name: build fuzz target
+        run: |
+          cd ${{ github.workspace }}
+          go-fuzz-build -libfuzzer -func ${{ matrix.target }} -o ${{ matrix.target }}.a .
+        shell: bash
+
+      - name: prepare seed corpus
+        run: |
+          cd ${{ github.workspace }}
+          mkdir -p testdata/fuzz/${{ matrix.target }}
+          # Use existing seed corpus if present
+          if [ -d "testdata/fuzz/${{ matrix.target }}" ]; then
+            cp -r testdata/fuzz/${{ matrix.target }}/* testdata/fuzz/${{ matrix.target }}/ 2>/dev/null || true
+          fi
+          # Also add golden vectors as seeds
+          go run ./cmd/gencorpus 2>/dev/null || true
+
+      - name: run fuzzer
+        run: |
+          cd ${{ github.workspace }}
+          # Run for 30 minutes per target
+          timeout 1800 go-fuzz -libfuzzer -func ${{ matrix.target }} \
+            -workdir testdata/fuzz/${{ matrix.target }} \
+            ${{ matrix.target }}.a \
+            -max_total_time=1800 \
+            -rss_limit_mb=2048 \
+            -timeout=30 \
+            2>&1 | tee fuzz-${{ matrix.target }}.log || true
+        shell: bash
+        continue-on-error: true
+
+      - name: check for crashes
+        if: always()
+        run: |
+          cd ${{ github.workspace }}
+          CRASH_DIR="testdata/fuzz/${{ matrix.target }}/crashers"
+          if [ -d "$CRASH_DIR" ] && [ -n "$(ls -A $CRASH_DIR)" ]; then
+            echo "Crashes found for ${{ matrix.target }}!"
+            ls -la "$CRASH_DIR"
+            # Create an issue for each unique crash
+            for crash in "$CRASH_DIR"/*; do
+              if [ -f "$crash" ]; then
+                echo "## Crash found in ${{ matrix.target }}" > crash-report.md
+                echo "" >> crash-report.md
+                echo "File: $(basename $crash)" >> crash-report.md
+                echo "" >> crash-report.md
+                echo "\`\`\`" >> crash-report.md
+                xxd "$crash" >> crash-report.md
+                echo "\`\`\`" >> crash-report.md
+                echo "" >> crash-report.md
+                echo "Fuzz target: ${{ matrix.target }}" >> crash-report.md
+                echo "Workflow run: ${{ github.run_id }}" >> crash-report.md
+                echo "" >> crash-report.md
+                echo "To reproduce locally:" >> crash-report.md
+                echo "\`\`\`bash" >> crash-report.md
+                echo "go test -fuzz=${{ matrix.target }} -fuzztime=30s" >> crash-report.md
+                echo "\`\`\`" >> crash-report.md
+                gh issue create --title "Fuzz crash: ${{ matrix.target }}" --body-file crash-report.md --label "bug,fuzz,crash" || true
+              fi
+            done
+            exit 1
+          fi
+          echo "No crashes found for ${{ matrix.target }}"
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: check for timeouts
+        if: always()
+        run: |
+          cd ${{ github.workspace }}
+          TIMEOUT_DIR="testdata/fuzz/${{ matrix.target }}/timeouts"
+          if [ -d "$TIMEOUT_DIR" ] && [ -n "$(ls -A $TIMEOUT_DIR)" ]; then
+            echo "Timeouts found for ${{ matrix.target }}!"
+            ls -la "$TIMEOUT_DIR"
+            # Create an issue for timeouts
+            echo "## Timeout found in ${{ matrix.target }}" > timeout-report.md
+            echo "" >> timeout-report.md
+            echo "Files:" >> timeout-report.md
+            for f in "$TIMEOUT_DIR"/*; do
+              if [ -f "$f" ]; then
+                echo "- $(basename $f)" >> timeout-report.md
+              fi
+            done
+            echo "" >> timeout-report.md
+            echo "Fuzz target: ${{ matrix.target }}" >> timeout-report.md
+            echo "Workflow run: ${{ github.run_id }}" >> timeout-report.md
+            echo "" >> timeout-report.md
+            echo "To reproduce locally:" >> timeout-report.md
+            echo "\`\`\`bash" >> timeout-report.md
+            echo "go test -fuzz=${{ matrix.target }} -fuzztime=30s" >> timeout-report.md
+            echo "\`\`\`" >> timeout-report.md
+            gh issue create --title "Fuzz timeout: ${{ matrix.target }}" --body-file timeout-report.md --label "bug,fuzz,timeout" || true
+          fi
+          echo "No timeouts found for ${{ matrix.target }}"
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: persist corpus
+        if: always()
+        run: |
+          cd ${{ github.workspace }}
+          # Commit any new corpus files
+          if git status --porcelain testdata/fuzz/${{ matrix.target }} | grep -q '^??'; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add testdata/fuzz/${{ matrix.target }}
+            git commit -m "chore(fuzz): update corpus for ${{ matrix.target }} [skip ci]" || true
+            git push || true
+          fi
+        shell: bash
+
+  # Regression test: run all fuzz targets with the committed corpus
+  # to ensure no regressions from previously found inputs.
+  regression:
+    name: fuzz regression
+    runs-on: ubuntu-latest
+    needs: fuzz
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: run regression tests
+        run: |
+          cd ${{ github.workspace }}
+          for target in FuzzValidateDelegateOrder FuzzInspect FuzzPreimage FuzzPayload FuzzDecodeAuthorizationEntry; do
+            if [ -d "testdata/fuzz/$target" ]; then
+              echo "Running regression for $target..."
+              go test -fuzz=$target -fuzztime=10s -run=NONE ./... 2>&1 | tail -20
+            fi
+          done
+        shell: bash

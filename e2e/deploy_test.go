@@ -133,8 +133,7 @@ func (h *harness) deployFixture(
 // with the given delegate signer set.
 func (h *harness) deployModularAccount(t *testing.T, deployer *keypair.Full, signers []string) deployment {
 	t.Helper()
-	contractID := h.deployAndFundFixture(t, deployer, wasmPath("modular_account"), scAddressVecVal(t, signers))
-	return deployment{ContractAddress: contractID}
+	return h.deployFixture(t, deployer, "modular_account", []xdr.ScVal{scAddressVecVal(t, signers)})
 }
 
 // sessionKey is one entry of the SessionKey vector the session-keys fixture
@@ -154,8 +153,7 @@ func (h *harness) deploySessionKeys(t *testing.T, deployer *keypair.Full, keys [
 	for _, key := range keys {
 		values = append(values, sessionKeyVal(t, key))
 	}
-	contractID := h.deployAndFundFixture(t, deployer, wasmPath("session_keys"), scVecVal(values))
-	return deployment{ContractAddress: contractID}
+	return h.deployFixture(t, deployer, "session_keys", []xdr.ScVal{scVecVal(values)})
 }
 
 // deployThresholdAccount uploads the threshold-account fixture and
@@ -167,8 +165,43 @@ func (h *harness) deployThresholdAccount(
 	threshold uint32,
 ) deployment {
 	t.Helper()
-	contractID := h.deployAndFundFixture(t, deployer, wasmPath("threshold_account"), scAddressVecVal(t, signers), scU32Val(threshold))
-	return deployment{ContractAddress: contractID}
+	return h.deployFixture(t, deployer, "threshold_account", []xdr.ScVal{scAddressVecVal(t, signers), scU32Val(threshold)})
+}
+
+// deployPolicyAccount uploads the policy-account fixture and instantiates it
+// with the given delegate signer set, per-period spending limit, and period
+// length in ledgers.
+//
+// The constructor's argument order is (signers, limit, period_ledgers), and the
+// limit is an i128 because that is the type the SAC transfer amount it is
+// compared against uses.
+func (h *harness) deployPolicyAccount(
+	t *testing.T,
+	deployer *keypair.Full,
+	signers []string,
+	limit int64,
+	periodLedgers uint32,
+) deployment {
+	t.Helper()
+	return h.deployFixture(t, deployer, "policy_account", []xdr.ScVal{
+		scAddressVecVal(t, signers),
+		i128(limit),
+		scU32Val(periodLedgers),
+	})
+}
+
+// deployPasskeyWallet uploads the passkey-wallet fixture and instantiates it
+// with the uncompressed SEC-1 P-256 credential public key it will authenticate.
+func (h *harness) deployPasskeyWallet(t *testing.T, deployer *keypair.Full, publicKey []byte) deployment {
+	t.Helper()
+	return h.deployFixture(t, deployer, "passkey_wallet", []xdr.ScVal{scBytesVal(publicKey)})
+}
+
+// scBytesVal wraps a byte slice as an ScvBytes argument, the type the
+// passkey-wallet constructor takes its credential public key as.
+func scBytesVal(value []byte) xdr.ScVal {
+	bytes := xdr.ScBytes(value)
+	return xdr.ScVal{Type: xdr.ScValTypeScvBytes, Bytes: &bytes}
 }
 
 // scSymbolVal wraps a symbol as an ScVal, the type an ScMap's keys must use.

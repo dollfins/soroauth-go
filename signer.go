@@ -3,10 +3,17 @@ package soroauth
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math/big"
+	"math/rand"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/stellar/go-stellar-sdk/keypair"
 	"github.com/stellar/go-stellar-sdk/strkey"
@@ -41,6 +48,13 @@ type Signer interface {
 	// structure it is approving rather than blind-signing a digest; the
 	// payload is passed so a signer that only accepts a digest does not have
 	// to re-derive it.
+	//
+	// Context Cancellation Guarantee:
+	// Implementers MUST honour ctx.Done() cancellation and return ctx.Err()
+	// promptly if the context is cancelled before or during signing. Remote,
+	// hardware, or custom signers that wrap non-interruptible network or
+	// device operations must explicitly document any inability to abort an
+	// ongoing hardware transaction or network request.
 	Sign(ctx context.Context, preimage xdr.HashIdPreimage, payload [32]byte) (xdr.ScVal, error)
 }
 
@@ -279,6 +293,9 @@ func (s *accountMultiSigner) Sign(ctx context.Context, _ xdr.HashIdPreimage, pay
 
 	signatures := make([]xdr.ScVal, 0, len(s.keys))
 	for _, key := range s.keys {
+		if err := ctx.Err(); err != nil {
+			return xdr.ScVal{}, fmt.Errorf("soroauth: sign account multisig: %w", err)
+		}
 		signature, err := key.kp.Sign(payload[:])
 		if err != nil {
 			return xdr.ScVal{}, fmt.Errorf("soroauth: sign account multisig: %s: %w", key.kp.Address(), err)
@@ -352,10 +369,303 @@ func NewPasskeySigner(address string, authenticatorData []byte, fn func(ctx cont
 	}
 }
 
+// es256Verifier verifies an ES256 signature -- ECDSA over P-256 with SHA-256
+// (WebAuthn Level 3 §5.8.2) -- over a digest that has already been hashed.
+//
+// It is the passkey analogue of ed25519Keypair: a seam, not an abstraction for
+// its own sake. The self-verification guard in passkeyAssertionSigner is there
+// to catch a signature that will not verify, and a guard tested only with
+// correct signatures proves nothing. A test supplies a verifier that returns
+// true unconditionally and asserts the guard still refuses, which is exactly
+// the failure the guard exists to catch.
+type es256Verifier interface {
+	verify(publicKey *ecdsa.PublicKey, digest []byte, r, s *big.Int) bool
+}
+
+// realES256Verifier is the verifier production uses: crypto/ecdsa's own P-256
+// check.
+type realES256Verifier struct{}
+
+func (realES256Verifier) verify(publicKey *ecdsa.PublicKey, digest []byte, r, s *big.Int) bool {
+	return ecdsa.Verify(publicKey, digest, r, s)
+}
+
+// passkeyAssertionSigner is the full passkey (WebAuthn) signer: it holds the
+// credential's public key and a parsed assertion, verifies the assertion at
+// Sign time, and only then produces the wallet's signature value.
+type passkeyAssertionSigner struct {
+	address   string
+	publicKey *ecdsa.PublicKey
+	assertion *WebAuthnAssertion
+	cfg       passkeySignerConfig
+	verifier  es256Verifier
+}
+
+// NewPasskeySignerFromAssertion returns a Signer for a passkey (WebAuthn) smart
+// wallet: it verifies the assertion against the payload it is asked to sign and
+// returns the ScVal such a wallet's __check_auth decodes.
+//
+// It differs from NewPasskeySigner in what it takes and in what it promises.
+// NewPasskeySigner takes a callback and checks the user-presence and
+// user-verification flags; the caller owns the signature and any cryptographic
+// verification of it. This constructor takes the parsed assertion (see
+// ParseWebAuthnAssertion) and the credential's P-256 public key, and verifies
+// the assertion itself before returning anything, the way NewEd25519Signer
+// verifies its own output. There is no way to call it such that an unverified
+// assertion produces a signature.
+//
+// Sign performs, in order:
+//
+//  1. the user-presence (UP, bit 0) and user-verification (UV, bit 2) flag
+//     checks the options request, reading the flags byte at offset 32 of the
+//     authenticator data (WebAuthn Level 3 §6.1), and failing with
+//     ErrVerificationFailed;
+//  2. the challenge-binding check: the challenge embedded in the assertion's
+//     clientDataJSON must be the payload about to be signed, or the assertion
+//     belongs to some other ceremony and is refused (WebAuthn Level 3 §7.2 step
+//     11). The failure wraps both ErrSignatureMismatch and
+//     ErrWebAuthnChallengeMismatch;
+//  3. the ES256 signature check, over SHA-256(authenticatorData ||
+//     SHA-256(clientDataJSON)) (WebAuthn Level 3 §6.1 and §7.2 step 21), with
+//     the DER-encoded assertion signature parsed by ParseDERECDSASignature. A
+//     signature that does not verify is ErrSignatureMismatch.
+//
+// The value it returns is {public_key, signature} with a sorted symbol-keyed
+// map: the uncompressed SEC1 P-256 public key, and the signature in the
+// fixed-width low-S r || s form Secp256r1SignatureScVal builds.
+//
+// Which contract that shape is for. Unlike a classic Stellar account, whose
+// signature ScVal the host itself defines
+// (rs-soroban-env/src/builtin_contracts/account_contract.rs), a custom
+// account's signature shape is whatever its __check_auth says it is. There is
+// no protocol-mandated passkey shape. This one targets the example wallet
+// contract in docs/passkeys.md, and nothing else: a wallet with a different
+// layout should keep this signer's verification and swap the returned ScVal,
+// or use SignerFunc. Nothing in this repository deploys or tests a contract
+// that decodes this shape.
+//
+// The assertion is supplied by the caller; this type never performs a WebAuthn
+// ceremony itself. A nil assertion or public key is reported as ErrMissingSigner
+// when Sign is called, because the constructor's signature has no error to
+// return.
+func NewPasskeySignerFromAssertion(
+	address string,
+	publicKey *ecdsa.PublicKey,
+	assertion *WebAuthnAssertion,
+	opts ...PasskeySignerOption,
+) Signer {
+	var cfg passkeySignerConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	return &passkeyAssertionSigner{
+		address:   address,
+		publicKey: publicKey,
+		assertion: assertion,
+		cfg:       cfg,
+		verifier:  realES256Verifier{},
+	}
+}
+
+func (s *passkeyAssertionSigner) Address() string { return s.address }
+
+func (s *passkeyAssertionSigner) Sign(ctx context.Context, _ xdr.HashIdPreimage, payload [32]byte) (xdr.ScVal, error) {
+	if err := ctx.Err(); err != nil {
+		return xdr.ScVal{}, fmt.Errorf("soroauth: sign passkey: %w", err)
+	}
+	if s.assertion == nil || s.publicKey == nil {
+		return xdr.ScVal{}, fmt.Errorf("soroauth: sign passkey: %w", ErrMissingSigner)
+	}
+	if !validP256PublicKey(s.publicKey) {
+		return xdr.ScVal{}, fmt.Errorf(
+			"soroauth: sign passkey: credential public key is not an uncompressed P-256 key: %w",
+			ErrVerificationFailed)
+	}
+
+	if s.cfg.requireUserPresence || s.cfg.requireUserVerification {
+		flags := s.assertion.Flags()
+		if s.cfg.requireUserPresence && flags&flagUserPresent == 0 {
+			return xdr.ScVal{}, fmt.Errorf(
+				"soroauth: sign passkey: user presence (UP) required but not set in flags 0x%02x: %w",
+				flags, ErrVerificationFailed)
+		}
+		if s.cfg.requireUserVerification && flags&flagUserVerified == 0 {
+			return xdr.ScVal{}, fmt.Errorf(
+				"soroauth: sign passkey: user verification (UV) required but not set in flags 0x%02x: %w",
+				flags, ErrVerificationFailed)
+		}
+	}
+
+	// The challenge is the only thing tying the ceremony to this transaction.
+	// Writing both sentinels means a caller can match whichever it thinks in:
+	// the signature is refused, and the reason is that the challenge differed.
+	if err := s.assertion.VerifyChallenge(payload[:]); err != nil {
+		return xdr.ScVal{}, fmt.Errorf("soroauth: sign passkey: %w: %w",
+			ErrSignatureMismatch, ErrWebAuthnChallengeMismatch)
+	}
+
+	digest := sha256.Sum256(s.assertion.SignedBytes())
+	r, sScalar, err := ParseDERECDSASignature(s.assertion.Signature)
+	if err != nil {
+		return xdr.ScVal{}, fmt.Errorf("soroauth: sign passkey: %w", ErrSignatureMismatch)
+	}
+
+	verifier := s.verifier
+	if verifier == nil {
+		verifier = realES256Verifier{}
+	}
+	if !verifier.verify(s.publicKey, digest[:], r, sScalar) {
+		return xdr.ScVal{}, fmt.Errorf("soroauth: sign passkey: %w", ErrSignatureMismatch)
+	}
+
+	// The wire form is low-S, so the same logical signature has one encoding.
+	lowS := normalizeP256LowS(sScalar, elliptic.P256().Params().N)
+	value, err := Secp256r1SignatureScVal(s.publicKey, marshalSecp256r1Signature(r, lowS))
+	if err != nil {
+		return xdr.ScVal{}, fmt.Errorf("soroauth: sign passkey: %w", err)
+	}
+	return value, nil
+}
+
 // signerFunc adapts a plain function to the Signer interface.
 type signerFunc struct {
 	address string
 	fn      func(ctx context.Context, preimage xdr.HashIdPreimage, payload [32]byte) (xdr.ScVal, error)
+}
+
+// RetryConfig holds configuration for retrying network/remote signer calls.
+type RetryConfig struct {
+	// Attempts is the maximum number of attempts (e.g. 3 means 1 initial try + 2 retries).
+	// If 0, defaults to 1 (no retries).
+	Attempts int
+	// InitialBackoff is the starting backoff duration between attempts.
+	InitialBackoff time.Duration
+	// MaxBackoff is the upper bound for backoff duration.
+	MaxBackoff time.Duration
+}
+
+// IsSignatureRejection reports whether an error represents a signature rejection or refusal
+// that should never be retried (e.g. signature mismatch, invalid credentials, refusal).
+func IsSignatureRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrSignatureMismatch) || errors.Is(err, ErrMissingSigner) || errors.Is(err, ErrTooManySignatures) {
+		return true
+	}
+	// Also check string signatures or custom rejection markers
+	s := err.Error()
+	return strings.Contains(s, "signature mismatch") || strings.Contains(s, "refused") || strings.Contains(s, "unsupported")
+}
+
+// WithRetry wraps a Signer with a jittered exponential backoff retry policy for transport errors.
+// Retries only occur on network/transport errors; signature rejections are never retried.
+// Context cancellation or timeout immediately terminates retries.
+func WithRetry(signer Signer, cfg RetryConfig) Signer {
+	if cfg.Attempts <= 0 {
+		cfg.Attempts = 1
+	}
+	return &retriedSigner{
+		inner: signer,
+		cfg:   cfg,
+	}
+}
+
+type retriedSigner struct {
+	inner Signer
+	cfg   RetryConfig
+}
+
+func (s *retriedSigner) Address() string {
+	return s.inner.Address()
+}
+
+func (s *retriedSigner) Sign(ctx context.Context, preimage xdr.HashIdPreimage, payload [32]byte) (xdr.ScVal, error) {
+	attempts := s.cfg.Attempts
+	if attempts <= 0 {
+		attempts = 1
+	}
+
+	backoffDur := s.cfg.InitialBackoff
+	if backoffDur <= 0 {
+		backoffDur = 50 * time.Millisecond
+	}
+	maxBackoff := s.cfg.MaxBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = 1 * time.Second
+	}
+
+	var lastErr error
+	for i := 1; i <= attempts; i++ {
+		if err := ctx.Err(); err != nil {
+			return xdr.ScVal{}, fmt.Errorf("soroauth: retry sign: %w", err)
+		}
+
+		val, err := s.inner.Sign(ctx, preimage, payload)
+		if err == nil {
+			return val, nil
+		}
+
+		lastErr = err
+
+		// Never retry signature rejections
+		if IsSignatureRejection(err) {
+			return xdr.ScVal{}, err
+		}
+
+		// If this was the last attempt, break and return error
+		if i >= attempts {
+			break
+		}
+
+		if err := ctx.Err(); err != nil {
+			return xdr.ScVal{}, fmt.Errorf("soroauth: retry sign cancelled: %w", err)
+		}
+
+		if err := ctx.Err(); err != nil {
+			return xdr.ScVal{}, fmt.Errorf("soroauth: retry sign cancelled: %w", err)
+		}
+
+		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+		var jitter time.Duration
+		if backoffDur/4 > 0 {
+			jitter = time.Duration(rng.Int63n(int64(backoffDur / 4)))
+		}
+		sleepDur := backoffDur + jitter
+		if sleepDur > maxBackoff {
+			sleepDur = maxBackoff
+		}
+
+		timer := time.NewTimer(sleepDur)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return xdr.ScVal{}, fmt.Errorf("soroauth: retry sign cancelled: %w", ctx.Err())
+		case <-timer.C:
+		}
+
+		if err := ctx.Err(); err != nil {
+			return xdr.ScVal{}, fmt.Errorf("soroauth: retry sign cancelled: %w", err)
+		}
+
+		if err := ctx.Err(); err != nil {
+			return xdr.ScVal{}, fmt.Errorf("soroauth: retry sign cancelled: %w", err)
+		}
+
+		backoffDur *= 2
+		if backoffDur > maxBackoff {
+			backoffDur = maxBackoff
+		}
+	}
+
+	return xdr.ScVal{}, lastErr
 }
 
 // SignerFunc adapts a function to the Signer interface, for custom account

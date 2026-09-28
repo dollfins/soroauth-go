@@ -215,7 +215,9 @@ func checkNetwork(url string, timeout time.Duration) doctorCheck {
 	if err != nil {
 		return doctorCheck{Name: name, Pass: false, Detail: fmt.Sprintf("%s: %v", url, err)}
 	}
-	defer resp.Body.Close()
+	// The response body is only drained for the connection's sake; its close
+	// error cannot change the reachability verdict.
+	defer func() { _ = resp.Body.Close() }()
 
 	return doctorCheck{Name: name, Pass: true, Detail: fmt.Sprintf("%s reachable (HTTP %d)", url, resp.StatusCode)}
 }

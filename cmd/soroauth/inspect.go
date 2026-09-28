@@ -12,7 +12,7 @@ import (
 const inspectUsage = `soroauth inspect — print an entry's structure as JSON.
 
 usage:
-  soroauth inspect --entry <base64> [--json]
+  soroauth inspect --entry <base64>|[-] [--json]
 
 --entry accepts either an authorization entry or a whole transaction envelope,
 and the tool works out which it was given. An envelope is reported as an array,

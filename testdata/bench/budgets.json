@@ -1,5 +1,5 @@
 {
-  "note": "Alloc and byte budgets for the signing path (issues #107 and #108). The signing-path budgets carry ~40% headroom over the measured maximum; baselines were measured 2026-09-24 on INTEL XEON PLATINUM 8573C (2 vCPU), linux/amd64, under both go1.25.4 (the toolchain CI installs, from the toolchain line in go.mod) and go1.27.1, taking the higher of the two where they differ (the delegates paths differ by up to 7 allocs between the toolchains). The BenchmarkXDRCopy budgets are deliberately tighter: they sit below the pre-pooling cost of a copy (26 allocs / 1632 B and 24 allocs / 1472 B, identical on both toolchains) so that reverting the pooled round-trip in internal/xdrcopy fails this gate instead of only a local run; headroom there is +3 allocs and +186/+194 bytes, and both toolchains measured those two benchmarks identically. ns/op is never gated. Raising a budget requires a commit body that says which change increased the cost and why it is acceptable. Never lower a budget without a fresh measurement on a machine named in the commit body.",
+  "note": "Alloc and byte budgets for the signing path (issues #107 and #108). The signing-path budgets carry ~40% headroom over the measured maximum; baselines were measured 2026-09-24 on INTEL XEON PLATINUM 8573C (2 vCPU), linux/amd64, under both go1.25.4 (the toolchain CI installs, from the toolchain line in go.mod) and go1.27.1, taking the higher of the two where they differ (the delegates paths differ by up to 7 allocs between the toolchains). The BenchmarkXDRCopy budgets are deliberately tighter: they sit below the pre-pooling cost of a copy (26 allocs / 1632 B and 24 allocs / 1472 B, identical on both toolchains) so that reverting the pooled round-trip in internal/xdrcopy fails this gate instead of only a local run; headroom there is +3 allocs and +186/+194 bytes, and both toolchains measured those two benchmarks identically. ns/op is never gated. Raising a budget requires a commit body that says which change increased the cost and why it is acceptable. Never lower a budget without a fresh measurement on a machine named in the commit body. BenchmarkParseAddress (4 allocs / 176 B), BenchmarkFormatAddress (1 allocs / 64 B) and BenchmarkDecodeAuthorizationEntry (21 allocs / 3528 B) were added by issue #122, and the hook, threshold and coordinator sub-benchmarks (51-52 allocs / ~3300 B, 4 / 232 B and 11 / 536 B respectively) were budgeted once the benchmark repair made them reachable; all were measured 2026-09-25 on Intel(R) Core(TM) i5-6300HQ, linux/amd64, go1.25.4, with the same ~40% headroom policy.",
   "budgets": {
     "BenchmarkPreimage": {
       "allocs": 28,
@@ -37,9 +37,45 @@
       "allocs": 1900,
       "bytes": 109000
     },
+    "BenchmarkAuthorizeBatch": {
+      "allocs": 3200,
+      "bytes": 190000
+    },
     "BenchmarkAuthorizeInvocation": {
       "allocs": 112,
       "bytes": 7000
+    },
+    "BenchmarkParseAddress": {
+      "allocs": 6,
+      "bytes": 250
+    },
+    "BenchmarkFormatAddress": {
+      "allocs": 2,
+      "bytes": 95
+    },
+    "BenchmarkDecodeAuthorizationEntry": {
+      "allocs": 30,
+      "bytes": 5000
+    },
+    "BenchmarkAuthorizeEntryWithHooks/no-hook": {
+      "allocs": 72,
+      "bytes": 4650
+    },
+    "BenchmarkAuthorizeEntryWithHooks/noop-hook": {
+      "allocs": 73,
+      "bytes": 4650
+    },
+    "BenchmarkAuthorizeEntryWithHooks/tracking-hook": {
+      "allocs": 73,
+      "bytes": 4650
+    },
+    "BenchmarkThresholdSigner/threshold-sign": {
+      "allocs": 6,
+      "bytes": 325
+    },
+    "BenchmarkCoordinatorState/coordinator-state": {
+      "allocs": 16,
+      "bytes": 760
     }
   }
 }

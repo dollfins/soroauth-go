@@ -1,0 +1,70 @@
+name: spellcheck
+
+# Spell-checks Markdown documentation. Runs on push to main, on a weekly
+# schedule, and on demand — not on pull requests.
+#
+# Pull requests are capped at the three checks the branch ruleset requires, and
+# a workflow that runs on pull_request adds a row for every job it declares.
+# links.yml, ci-go.yml, ci-parity.yml, ci-wasm.yml and ci-adapters.yml are all
+# shaped this way for the same reason. The cost is that a typo reaches main and
+# is caught on the push, one commit later rather than one review earlier.
+#
+# The project-specific dictionary is committed at .cspell-words.txt so
+# protocol terms (CAP-71-01, SOROBAN_CREDENTIALS_ADDRESS_V2, etc.) do not
+# fail the check. The dictionary is the source of truth: if a word is a
+# legitimate term in this project, add it there rather than suppressing it
+# inline.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.md'
+      - '.cspell-words.txt'
+      - 'cspell.json'
+      - '.github/workflows/spellcheck.yml'
+  schedule:
+    # Weekly, Monday 06:30 UTC (staggered from the link check at 06:00)
+    - cron: '30 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spellcheck:
+    name: spellcheck markdown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # Install cspell from npm. We use a package.json only for the lockfile;
+      # the actual tool is installed globally via npx in the step below.
+      - name: install cspell
+        run: npm ci
+
+      # Run cspell on all markdown files. The config is in cspell.json and
+      # the project dictionary is in .cspell-words.txt. Both are committed.
+      - name: run spellcheck
+        run: npx cspell --config cspell.json './**/*.md'
+
+      # If there are any unknown words, suggest adding them to the dictionary.
+      # This step only runs on failure so the log isn't noisy on success.
+      - name: suggest dictionary additions
+        if: failure()
+        run: |
+          echo "## Spellcheck failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Unknown words were found. If they are legitimate project terms," >> "$GITHUB_STEP_SUMMARY"
+          echo "add them to \`.cspell-words.txt\` (one per line) and commit the change." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Run locally to see the full list:" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`sh" >> "$GITHUB_STEP_SUMMARY"
+          echo "npx cspell --config cspell.json './**/*.md'" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"

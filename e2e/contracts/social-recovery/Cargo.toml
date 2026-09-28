@@ -2,9 +2,17 @@
 name = "social-recovery"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.91.0"
+publish = false
+license = "Apache-2.0"
+description = "Test fixture: a custom account whose guardians can rotate its signing key after a timelock. Not a product."
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+doctest = false
 
 [dependencies]
-soroban-sdk = "22.0.0"
+soroban-sdk = "=27.0.6"
+
+[dev-dependencies]
+soroban-sdk = { version = "=27.0.6", features = ["testutils"] }

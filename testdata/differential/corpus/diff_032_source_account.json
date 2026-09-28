@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "diff_032_source_account",
+  "generator": "cmd/difffuzz",
+  "seed": 20260927,
+  "index": 32,
+  "credential_arm": "source_account",
+  "network_passphrase": "Public Global Stellar Network ; September 2015",
+  "valid_until_ledger": 1,
+  "unsigned_entry_xdr": "AAAAAAAAAAAAAAABYprxKTVq3TO4gxXvPI2vU8ceEWDLyYNijKSHUwTVHtUAAAAHYXBwcm92ZQAAAAADAAAAAAAAAAAAAAADuY4aaQAAAAqsTGAmVeNZX3Ak2xu+V3AJAAAAAA==",
+  "preimage_xdr": "",
+  "payload_hex": ""
+}

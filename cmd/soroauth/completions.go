@@ -67,7 +67,9 @@ var commandSpecs = []commandSpec{
 		Flags: []flagSpec{
 			{Name: "entry", Description: "authorization entry or transaction envelope, as base64 XDR", TakesValue: true},
 			{Name: "valid-until", Description: "the last ledger at which the signature is valid", TakesValue: true},
-			{Name: "network", Description: "testnet, public, or a literal network passphrase", TakesValue: true},
+			{Name: "valid-for", Description: "the signature lifetime in ledgers, resolved against the current ledger (needs --rpc-url)", TakesValue: true},
+			{Name: "rpc-url", Description: "RPC endpoint used to resolve --valid-for (default $SOROAUTH_RPC_URL)", TakesValue: true},
+			{Name: "network", Description: "testnet, futurenet, public, or a literal network passphrase", TakesValue: true},
 			{Name: "json", Description: "output as JSON", TakesValue: false},
 		},
 	},
@@ -77,8 +79,11 @@ var commandSpecs = []commandSpec{
 		Flags: []flagSpec{
 			{Name: "entry", Description: "authorization entry or transaction envelope, as base64 XDR", TakesValue: true},
 			{Name: "valid-until", Description: "the last ledger at which the signature is valid", TakesValue: true},
-			{Name: "network", Description: "testnet, public, or a literal network passphrase", TakesValue: true},
+			{Name: "valid-for", Description: "the signature lifetime in ledgers, resolved against the current ledger (needs --rpc-url)", TakesValue: true},
+			{Name: "rpc-url", Description: "RPC endpoint used to resolve --valid-for (default $SOROAUTH_RPC_URL)", TakesValue: true},
+			{Name: "network", Description: "testnet, futurenet, public, or a literal network passphrase", TakesValue: true},
 			{Name: "secret-env", Description: "name of the environment variable holding the seed", TakesValue: true},
+			{Name: "assertion", Description: "path to a WebAuthn assertion JSON file, or - for stdin", TakesValue: true},
 			{Name: "for", Description: "credential node to sign, when it is not the signer's own address", TakesValue: true},
 			{Name: "json", Description: "output as JSON", TakesValue: false},
 		},
@@ -89,7 +94,10 @@ var commandSpecs = []commandSpec{
 		Flags: []flagSpec{
 			{Name: "entry", Description: "the authorization entry, as base64 XDR", TakesValue: true},
 			{Name: "valid-until", Description: "the last ledger at which the signatures are valid", TakesValue: true},
+			{Name: "valid-for", Description: "the signature lifetime in ledgers, resolved against the current ledger (needs --rpc-url)", TakesValue: true},
+			{Name: "rpc-url", Description: "RPC endpoint used to resolve --valid-for (default $SOROAUTH_RPC_URL)", TakesValue: true},
 			{Name: "delegate", Description: "a delegate address; repeat for several", TakesValue: true},
+			{Name: "nested-json", Description: "JSON string defining nested delegate tree", TakesValue: true},
 			{Name: "json", Description: "output as JSON", TakesValue: false},
 		},
 	},
@@ -116,7 +124,7 @@ var commandSpecs = []commandSpec{
 		Flags: []flagSpec{
 			{Name: "entry", Description: "base64-encoded authorization entry (required)", TakesValue: true},
 			{Name: "valid-until", Description: "signature expiration ledger (required)", TakesValue: true},
-			{Name: "network", Description: "testnet, public, or a literal passphrase (required)", TakesValue: true},
+			{Name: "network", Description: "testnet, futurenet, public, or a literal passphrase (required)", TakesValue: true},
 			{Name: "secret-env", Description: "name of environment variable holding the secret seed (required)", TakesValue: true},
 			{Name: "for", Description: "target address to sign for (optional)", TakesValue: true},
 		},
@@ -145,7 +153,7 @@ var commandSpecs = []commandSpec{
 		Description: "check an entry's signatures without submitting it",
 		Flags: []flagSpec{
 			{Name: "entry", Description: "the authorization entry or transaction envelope, as base64 XDR", TakesValue: true},
-			{Name: "network", Description: "testnet, public, or a literal network passphrase", TakesValue: true},
+			{Name: "network", Description: "testnet, futurenet, public, or a literal network passphrase", TakesValue: true},
 			{Name: "valid-until", Description: "assert the expiration the entry carries (optional)", TakesValue: true},
 			{Name: "allow-unsigned", Description: "accept unsigned nodes (a Void top-level node of a delegates entry is legitimate under CAP-71-01)", TakesValue: false},
 			{Name: "json", Description: "output as JSON", TakesValue: false},
@@ -157,6 +165,25 @@ var commandSpecs = []commandSpec{
 		Flags: []flagSpec{
 			{Name: "shell", Description: "which shell: bash, zsh, or fish", TakesValue: true},
 			{Name: "json", Description: "output as JSON", TakesValue: false},
+		},
+	},
+	{
+		Name:        "man",
+		Description: "emit a roff man page",
+		Flags: []flagSpec{
+			{Name: "out", Description: "write the page to this path instead of stdout", TakesValue: true},
+			{Name: "json", Description: "output as JSON", TakesValue: false},
+		},
+	},
+	{
+		Name:        "wasm-budget",
+		Description: "measure the wasm core against a size ceiling",
+		Flags: []flagSpec{
+			{Name: "out", Description: "path to the wasm artifact to measure", TakesValue: true},
+			{Name: "budget", Description: "maximum allowed size in bytes", TakesValue: true},
+			{Name: "prev-size", Description: "previous release's size, for a delta", TakesValue: true},
+			{Name: "build-cmd", Description: "command to build the artifact before measuring", TakesValue: true},
+			{Name: "json", Description: "output the result as JSON", TakesValue: false},
 		},
 	},
 }
@@ -236,7 +263,7 @@ func bashCompletionScript() string {
 	b.WriteString("\t\t\tCOMPREPLY=( $(compgen -W \"ascii dot\" -- \"$cur\") )\n")
 	b.WriteString("\t\t\treturn 0\n\t\t\t;;\n")
 	b.WriteString("\t\t--network)\n")
-	b.WriteString("\t\t\tCOMPREPLY=( $(compgen -W \"testnet public\" -- \"$cur\") )\n")
+	b.WriteString("\t\t\tCOMPREPLY=( $(compgen -W \"testnet futurenet public\" -- \"$cur\") )\n")
 	b.WriteString("\t\t\treturn 0\n\t\t\t;;\n")
 	b.WriteString("\tesac\n")
 	b.WriteString("\n\t# after a subcommand, complete that subcommand's flags\n")

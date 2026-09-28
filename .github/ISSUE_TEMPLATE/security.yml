@@ -1,0 +1,44 @@
+name: Security issue
+description: Report a security vulnerability privately through GitHub Security Advisories
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not describe the vulnerability here.**
+
+        This template exists only to redirect you to the private reporting channel.
+        Security issues must be reported through GitHub Security Advisories so they
+        stay confidential until a fix is available.
+
+        **[Open a private security advisory →](https://github.com/soroauth/soroauth-go/security/advisories/new)**
+
+        ---
+
+        ### What belongs in a private advisory
+
+        - A signature produced over the wrong payload (wrong preimage variant, wrong
+          network ID, wrong nonce, wrong expiration, or an address bound in that is
+          not the one the caller named).
+        - A signature written onto a credential node other than the intended target,
+          or onto a node whose address does not match.
+        - An entry accepted for signing that should have been refused — an
+          already-signed node silently overwritten, a delegates array accepted out
+          of order or with duplicates, an expiration that disagrees with signatures
+          already on the entry.
+        - Any way to make the library emit an entry whose stored expiration differs
+          from the expiration that was signed over.
+        - A secret reaching stdout, stderr, an error message, a log, or disk.
+        - Divergence from the golden vectors that is not a bug in the vectors.
+        - Panics reachable from untrusted input, or denial of service through
+          malformed XDR.
+
+        ### What belongs in a public issue instead
+
+        - Feature requests and enhancements.
+        - Documentation improvements.
+        - Non-security bugs (incorrect help text, CLI UX issues, etc.).
+        - Questions about usage.
+
+        See [SECURITY.md](https://github.com/soroauth/soroauth-go/blob/main/SECURITY.md)
+        for the full policy, scope, and supported versions.

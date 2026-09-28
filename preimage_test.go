@@ -14,7 +14,7 @@ import (
 // testInvocation builds a small but non-trivial call tree: a contract call with
 // one argument and one sub-invocation, so the tests cover the recursive part of
 // the encoding rather than a bare leaf.
-func testInvocation(t *testing.T) xdr.SorobanAuthorizedInvocation {
+func testInvocation(t testing.TB) xdr.SorobanAuthorizedInvocation {
 	t.Helper()
 
 	contract, err := ParseAddress(testContractAddress(t, "soroauth-preimage-contract"))
@@ -50,7 +50,7 @@ func testInvocation(t *testing.T) xdr.SorobanAuthorizedInvocation {
 }
 
 // testAddressCredentials builds the address credentials every arm shares.
-func testAddressCredentials(t *testing.T, label string, nonce int64) xdr.SorobanAddressCredentials {
+func testAddressCredentials(t testing.TB, label string, nonce int64) xdr.SorobanAddressCredentials {
 	t.Helper()
 	address, err := ParseAddress(testKeypair(t, label).Address())
 	if err != nil {
@@ -72,7 +72,7 @@ func newScVec(values ...xdr.ScVal) **xdr.ScVec {
 
 // entryForArm builds an entry on the requested credentials arm, all sharing the
 // same nonce and invocation so payloads can be compared across arms.
-func entryForArm(t *testing.T, armType xdr.SorobanCredentialsType, nonce int64) xdr.SorobanAuthorizationEntry {
+func entryForArm(t testing.TB, armType xdr.SorobanCredentialsType, nonce int64) xdr.SorobanAuthorizationEntry {
 	t.Helper()
 
 	credentials := testAddressCredentials(t, "soroauth-preimage-signer", nonce)

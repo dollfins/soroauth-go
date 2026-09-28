@@ -1,0 +1,15 @@
+# Configuration for the documentation link check (issue #152), read by lychee in
+# .github/workflows/links.yml.
+#
+# The docs cross-link heavily and point at CAPs, rs-soroban-env and SDK pages
+# that move, so the check has to be quiet about transient network noise and
+# loud about a link that is actually gone.
+
+# Retry a couple of times before calling a link broken: a transient 5xx or a
+# briefly unreachable host is not a documentation defect.
+max_retries = 2
+retry_wait_time = 2
+
+# A rate-limited response still proves the host and path resolved, which is what
+# a link check is about. Report it, do not fail on it.
+accept = [200, 206, 429]

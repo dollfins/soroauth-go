@@ -70,8 +70,8 @@ func TestThresholdSignerSign(t *testing.T) {
 	seed2 := sha256.Sum256([]byte(kp2.Seed()))
 	share1 := append([]byte("party1"), seed1[:]...)
 	share2 := append([]byte("party2"), seed2[:]...)
-	signer.Contribute(ctx, round, share1)
-	signer.Contribute(ctx, round, share2)
+	_, _ = signer.Contribute(ctx, round, share1)
+	_, _ = signer.Contribute(ctx, round, share2)
 
 	sig, err := signer.Sign(ctx, xdr.HashIdPreimage{}, [32]byte{})
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestThresholdSignerNoSecretMaterial(t *testing.T) {
 
 	seed := sha256.Sum256([]byte("test"))
 	share := append([]byte("test-share"), seed[:]...)
-	signer.Contribute(ctx, round, share)
+	_, _ = signer.Contribute(ctx, round, share)
 
 	assert.NotEmpty(t, signer.Address())
 }

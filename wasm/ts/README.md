@@ -8,6 +8,17 @@ the 32-byte payload, and write the signature back onto the entry — instead of
 trusting a server to hand over a payload. It calls through to the same Go code
 the native library and CLI use; there is no second implementation to drift.
 
+## Exported Symbol Rationale & Limitations
+
+- `preimage`: Constructs and hashes authorization preimages locally. Throws for source-account entries.
+- `payload`: Hashes raw base64 XDR preimages for remote signers.
+- `writeSignature`: Applies external signatures (e.g., passkeys) to specific nodes.
+- `authorizeWithSeed`: Facilitates local testing and demos with seed-based keypairs.
+
+## Limitations & Production Readiness
+
+This package handles client-side Soroban authorization signing and preimage generation. It does not submit transactions or estimate resource fees directly; callers must perform the two-pass simulation flow and fee computation on their backend or RPC client.
+
 ## Install
 
 ```sh

@@ -15,11 +15,74 @@ const (
 	CredentialTypeAddressWithDelegates = "address_with_delegates"
 )
 
+// SignatureShapeType identifies the category of a signature's structure best-effort.
+type SignatureShapeType string
+
+const (
+	// SignatureShapePasskey represents a passkey signature shape.
+	SignatureShapePasskey SignatureShapeType = "passkey"
+
+	// SignatureShapeMap represents a map structure signature shape.
+	SignatureShapeMap SignatureShapeType = "map"
+
+	// SignatureShapeUnknown represents an unknown or uncheckable signature shape.
+	SignatureShapeUnknown SignatureShapeType = "unknown"
+)
+
+// SignatureShape describes the structural shape of a signature best-effort without
+// performing verification or upgrading the description into a verification verdict.
+type SignatureShape struct {
+	Type        SignatureShapeType `json:"type"`
+	Description string             `json:"description"`
+}
+
+// DescribeSignature inspects an ScVal signature and returns its best-effort shape description.
+func DescribeSignature(sig xdr.ScVal) SignatureShape {
+	switch sig.Type {
+	case xdr.ScValTypeScvVoid:
+		return SignatureShape{
+			Type:        SignatureShapeUnknown,
+			Description: "void (unsigned placeholder)",
+		}
+	case xdr.ScValTypeScvBytes:
+		if sig.Bytes != nil && *sig.Bytes != nil && len(*sig.Bytes) == 64 {
+			return SignatureShape{
+				Type:        SignatureShapePasskey,
+				Description: "64-byte binary passkey signature",
+			}
+		}
+		var length int
+		if sig.Bytes != nil && *sig.Bytes != nil {
+			length = len(*sig.Bytes)
+		}
+		return SignatureShape{
+			Type:        SignatureShapeUnknown,
+			Description: fmt.Sprintf("binary signature of length %d", length),
+		}
+	case xdr.ScValTypeScvMap:
+		return SignatureShape{
+			Type:        SignatureShapeMap,
+			Description: "map structure signature",
+		}
+	case xdr.ScValTypeScvVec:
+		return SignatureShape{
+			Type:        SignatureShapeUnknown,
+			Description: "vector structure signature",
+		}
+	default:
+		return SignatureShape{
+			Type:        SignatureShapeUnknown,
+			Description: fmt.Sprintf("unknown scval type %v", sig.Type),
+		}
+	}
+}
+
 // NodeInfo describes one delegate node and everything beneath it.
 type NodeInfo struct {
-	Address string     `json:"address"`
-	Signed  bool       `json:"signed"` // false for Void or an empty ScvVec
-	Nested  []NodeInfo `json:"nested,omitempty"`
+	Address string          `json:"address"`
+	Signed  bool            `json:"signed"` // false for Void or an empty ScvVec
+	Shape   *SignatureShape `json:"shape,omitempty"`
+	Nested  []NodeInfo      `json:"nested,omitempty"`
 }
 
 // EntryInfo is a structural summary of an authorization entry.
@@ -79,9 +142,11 @@ func inspectDelegates(nodes []xdr.SorobanDelegateSignature, depth int) ([]NodeIn
 		if err != nil {
 			return nil, err
 		}
+		shape := DescribeSignature(nodes[i].Signature)
 		out = append(out, NodeInfo{
 			Address: address,
 			Signed:  isSigned(nodes[i].Signature),
+			Shape:   &shape,
 			Nested:  nested,
 		})
 	}

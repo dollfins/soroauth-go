@@ -1,0 +1,16 @@
+{
+  "date_utc": "2026-01-01T00:00:00Z",
+  "network": "Test SDF Network ; September 2015",
+  "protocol_version": 22,
+  "total_scenarios": 1,
+  "entries": [
+    {
+      "vector_id": "A",
+      "implementation": "soroauth-go",
+      "scenario_id": "A",
+      "name": "Basic authorization",
+      "verdict": "PASS",
+      "credential_arm": "v2"
+    }
+  ]
+}

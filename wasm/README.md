@@ -1,5 +1,16 @@
 # soroauth WebAssembly signing core
 
+## Exported API Rationale & Limitations
+
+- **preimage**: Derives the signing `HashIdPreimage` and its 32-byte SHA-256 payload locally in the browser, eliminating reliance on a trusted server. *Limitation*: Source-account entries have no preimage and throw an error rather than returning empty success.
+- **payload**: Hashes an already constructed preimage (base64 XDR) to its 32-byte digest, supporting remote signers without entry reconstruction.
+- **writeSignature**: Writes an externally produced signature `ScVal` onto target credential nodes, maintaining strict isolation of signing keys.
+- **authorizeWithSeed**: Provides a deterministic test and local demo path using an in-memory raw ed25519 seed.
+
+## Production Readiness
+
+The WASM build is fully production-ready for deriving preimages and writing signatures (such as passkey credentials) in browser environments. However, callers must ensure correct resource fees and execute the two-pass simulation flow prior to submitting transactions on-chain.
+
 The signing core builds for `js/wasm`, so a browser can derive the bytes it
 signs rather than trusting a server to supply the payload. That is what makes
 passkey signing viable: the wallet builds the preimage, hashes it, and only then

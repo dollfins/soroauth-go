@@ -1,0 +1,22 @@
+[package]
+name = "passkey-wallet"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91.0"
+publish = false
+license = "Apache-2.0"
+description = "Test fixture: a custom account that authenticates a P-256 (secp256r1) signature. Not a product."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = "=27.0.6"
+
+[dev-dependencies]
+soroban-sdk = { version = "=27.0.6", features = ["testutils"] }
+# Signing keys for the unit tests. The contract itself never signs anything, so
+# this is a dev-dependency only; it is the same crate version soroban-sdk's own
+# testutils use for P-256.
+p256 = { version = "=0.13.2", features = ["ecdsa"] }

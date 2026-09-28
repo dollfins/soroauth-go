@@ -1,3 +1,7 @@
+# The two checks the branch ruleset requires.
+#
+# Never filtered by path. A required check that is skipped reports no
+# conclusion, and the pull request can then never be merged.
 name: ci
 
 on:
@@ -9,45 +13,6 @@ permissions:
   contents: read
 
 jobs:
-  coverage:
-    name: coverage above floor
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          check-latest: true
-      - name: run tests with coverage
-        run: |
-          go test -coverprofile=coverage.out -covermode=atomic ./...
-          echo "=== Coverage report ==="
-          go tool cover -func=coverage.out
-      - name: check coverage floor
-        run: |
-          # 60 is a floor set below a measured total, not an aspiration. The
-          # 80 this replaced never passed: every push to main since the floor
-          # was added reported ~62% and failed (run 36087884030 printed
-          # "Total coverage: 62.1% is below the floor of 80%").
-          # Measured 2026-09-25 with go1.25.4 on linux/amd64:
-          #   go test -coverprofile=coverage.out -covermode=atomic ./...
-          #   go tool cover -func=coverage.out | tail -1  ->  total: 62.8%
-          # Raise this as tests are added; never lower it without a fresh
-          # measurement named in the commit body.
-          floor=60
-          total=$(go tool cover -func=coverage.out | awk '/total/{print $3}' | tr -d '%')
-          echo "Total coverage: ${total}%"
-          if python3 -c "import sys; sys.exit(0 if float('${total}') < float('${floor}') else 1)"; then
-            echo "Coverage ${total}% is below the floor of ${floor}%"
-            exit 1
-          fi
-      - name: publish coverage
-        uses: codecov/codecov-action@v5
-        with:
-          files: ./coverage.out
-          fail_ci_if_error: false
-          verbose: true
-
   build:
     name: vet and test
     runs-on: ubuntu-latest
@@ -67,107 +32,47 @@ jobs:
           fi
       - name: vet
         run: go vet ./...
+      # The e2e files sit behind a build tag, so `go vet ./...` never
+      # compiles them. Two breakages reached main through that gap: a
+      # deploy helper calling a txnbuild function that does not exist, and
+      # a test using the soroauth package without importing it. Vetting the
+      # tag costs no extra check and closes it.
+      - name: vet (e2e build tag)
+        run: go vet -tags e2e ./...
       # -race because internal/xdrcopy shares encoder/decoder buffers across
       # calls through sync.Pool: TestCopyConcurrentReuse only proves the
       # no-aliasing guarantee holds under concurrency if something is actually
       # watching for concurrent misuse.
+      # The seed corpus is generated from the golden vectors, so it can drift
+      # the same way they can. Regenerating and diffing costs a second and is a
+      # step of this job rather than a job of its own, because pull requests are
+      # capped at three checks. The seeds themselves are exercised by the
+      # `go test` below: Go runs every file in
+      # testdata/fuzz/FuzzValidateDelegateOrder as a normal subtest.
+      - name: fuzz seed corpus is reproducible
+        run: |
+          go run ./cmd/gencorpus
+          if ! git diff --exit-code testdata/fuzz; then
+            echo
+            echo "The committed fuzz seed corpus differs from freshly generated seeds."
+            echo "Regenerate it with:"
+            echo "  go run ./cmd/gencorpus"
+            echo "and commit the result."
+            exit 1
+          fi
       - name: test
+        run: go test -race -v -run TestAuthorizeEntryExpirationProperty ./...
+      - name: test all
         run: go test -race ./...
+      # The parity regression test lives in the e2e package, so the tag hides it
+      # from `go test ./...`, but it needs no network: it reads the committed
+      # report when a live one is absent (e2e/testdata/parity_regression.json).
+      # Run here as a step of this job rather than as a job of its own, because
+      # pull requests are capped at three checks. This is what makes a parity
+      # regression fail the build instead of only a local run.
+      - name: parity report regression
+        run: go test -tags e2e -run TestParityReportRegression ./e2e
 
-  # The wallet SDK adapter is a nested module, so the gofmt, vet and test steps
-  # above do not reach it: `./...` stops at any directory holding its own
-  # go.mod. It is checked here instead. Without this job the adapter would be
-  # unbuilt and untested in CI, which is the gap a nested module invites.
-  adapter:
-    name: wallet sdk adapter
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          check-latest: true
-          cache-dependency-path: adapters/walletsdk/go.sum
-      - name: gofmt
-        working-directory: adapters/walletsdk
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "these files are not gofmt clean:"
-            echo "$unformatted"
-            exit 1
-          fi
-      - name: vet
-        working-directory: adapters/walletsdk
-        run: go vet ./...
-      # -race for the same reason as the root test job: the adapter verifies its
-      # own signatures, and the test suite is what says the signed bytes are a
-      # real ed25519 signature rather than a shape it agrees with itself about.
-      - name: test
-        working-directory: adapters/walletsdk
-        run: go test -race ./...
-  # The GCP KMS adapter is a nested module too, for the same reason: it names a
-  # cloud SDK the root module must not pull in. Its tests use a fake KMS client,
-  # so the job needs no credentials and never touches live GCP.
-  gcpkms:
-    name: gcp kms adapter
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          check-latest: true
-          cache-dependency-path: adapters/gcpkms/go.sum
-      - name: gofmt
-        working-directory: adapters/gcpkms
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "these files are not gofmt clean:"
-            echo "$unformatted"
-            exit 1
-          fi
-      - name: vet
-        working-directory: adapters/gcpkms
-        run: go vet ./...
-      # -race because the signer verifies its own output; the test suite is what
-      # says the signed bytes are a real ed25519 signature, not a shape the code
-      # agrees with itself about.
-      - name: test
-        working-directory: adapters/gcpkms
-        run: go test -race ./...
-  cross-compile:
-    name: cross-compile release targets
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          check-latest: true
-      # One job building every release target, rather than a matrix. A matrix
-      # reports one check per target, which turned a contributor's pull request
-      # into ten checks for six jobs and buried the two that actually gate the
-      # merge. Building five targets takes seconds; the toolchain setup is what
-      # costs, and this pays it once.
-      - name: build every release target
-        run: |
-          set -euo pipefail
-          failed=0
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-            goos="${target%%/*}"
-            goarch="${target##*/}"
-            echo "::group::$goos/$goarch"
-            if GOOS="$goos" GOARCH="$goarch" go build ./... ; then
-              echo "ok $goos/$goarch"
-            else
-              echo "::error::build failed for $goos/$goarch"
-              failed=1
-            fi
-            echo "::endgroup::"
-          done
-          exit "$failed"
   golden-drift:
     name: golden vectors are reproducible
     runs-on: ubuntu-latest
@@ -191,10 +96,26 @@ jobs:
         working-directory: testdata/gen
         run: node gen.mjs
 
+      # The passkey vectors have a different reference implementation
+      # (smart-account-kit, for the signature shape @stellar/stellar-sdk does
+      # not define) so they have their own generator. It installs from the same
+      # lockfile as the step above, and writes under testdata/vectors, so the
+      # diff below covers it too.
+      - name: regenerate the passkey vectors
+        working-directory: testdata/gen
+        run: node gen-passkey.mjs
+
       # The vectors are generated, committed artefacts. If regenerating them
       # changes anything, then either someone edited a vector by hand or the
       # reference implementation moved, and in both cases the committed
       # evidence no longer says what it claims to.
+      # The browser demo (#55) needs a browser, an authenticator and a passkey
+      # wallet contract, none of which exist here, so it cannot run end to end
+      # in CI. This runs its logic against the same pinned SDK the install step
+      # above produced, which is what keeps the demo's SDK calls honest.
+      - name: check the browser demo against the pinned sdk
+        run: node examples/browser-passkey/app.test.mjs
+
       - name: fail if the committed vectors changed
         run: |
           if ! git diff --exit-code testdata/vectors; then
@@ -206,79 +127,36 @@ jobs:
             exit 1
           fi
 
-  python-parity:
-    name: python sdk parity
+  # Third and final pull-request check. The fixture contracts are Rust and the
+  # Go jobs do not compile them, which is how a contract that had never built
+  # reached main and broke the scheduled e2e run for five runs in a row.
+  #
+  # Build and unit-test in one job on purpose: pull requests are capped at three
+  # checks, so this covers both rather than becoming two.
+  contracts:
+    name: contracts build and test
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: e2e/contracts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # The runner's system python is used on purpose: the harness pins the one
-      # dependency it needs in requirements.txt, and pulling in a toolchain
-      # action would be one more thing to keep pinned for no benefit.
-      - name: install the pinned reference sdk and run the parity harness
+      # rust-toolchain.toml pins the channel and the wasm32v1-none target, so
+      # rustup installs exactly what the contracts are built with.
+      - name: show the pinned toolchain
         run: |
-          python3 -m venv .venv-parity
-          . .venv-parity/bin/activate
-          pip install -r testdata/parity-python/requirements.txt
-          python3 testdata/parity-python/parity.py
-          python3 testdata/parity-python/test_parity.py
-
-  rust-parity:
-    name: rust xdr parity
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # The runner's preinstalled rustup is used on purpose: rust-toolchain.toml
-      # pins the exact toolchain (1.93.0), so no toolchain action needs a SHA
-      # pin of its own.
-      - name: run the parity harness and its tests
-        working-directory: testdata/parity-rust
-        # --locked makes the committed Cargo.lock authoritative: the job fails
-        # rather than silently re-resolving to a different stellar-xdr.
-        run: |
-          cargo test --locked
-          cargo run --locked --bin parity
-
-  wasm:
-    name: wasm signing core and typescript wrapper
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+          rustc --version
+          cargo --version
+      - name: cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          go-version-file: go.mod
-          check-latest: true
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: wasm/ts/package-lock.json
-      # The core builds only for js/wasm, so `go build ./...` on the host skips
-      # it. This job is the only place it is compiled, which is why the build is
-      # a step of its own rather than folded into `go test`.
-      - name: build the wasm module
-        run: ./wasm/build.sh
-      - name: wasm byte parity against the golden vectors
-        run: node wasm/parity.mjs
-      - name: typescript wrapper
-        working-directory: wasm/ts
-        run: |
-          npm ci
-          npm run typecheck
-          npm test
-
-  bench:
-    name: signing-path budgets
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          check-latest: true
-      # ns/op is deliberately not gated: wall-clock on a shared runner is too
-      # noisy to be evidence. allocs/op and B/op are deterministic and are
-      # compared against testdata/bench/budgets.json.
-      - name: run signing-path benchmarks
-        run: go test -run '^$' -bench . -benchmem -count=1 . | tee bench.out
-      - name: fail on allocation or byte regression
-        run: go run ./scripts/checkbench bench.out testdata/bench/budgets.json
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            e2e/contracts/target
+          key: contracts-${{ runner.os }}-${{ hashFiles('e2e/contracts/Cargo.lock') }}
+          restore-keys: contracts-${{ runner.os }}-
+      - name: cargo test
+        run: cargo test --workspace --locked
+      - name: build every contract to wasm
+        run: cargo build --release --target wasm32v1-none --workspace --locked

@@ -1,0 +1,16 @@
+{
+  "name": "soroauth-differential-fuzzing",
+  "version": "0.0.0",
+  "private": true,
+  "description": "JS verifier for the soroauth differential fuzzing corpus. @stellar/stellar-sdk is the reference implementation the corpus payloads are checked against, and it is pinned exactly: a payload recomputed by another build is not evidence.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "17.1.0"
+  }
+}

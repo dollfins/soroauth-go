@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "diff_006_address_v2",
+  "generator": "cmd/difffuzz",
+  "seed": 20260927,
+  "index": 6,
+  "credential_arm": "address_v2",
+  "network_passphrase": "Test SDF Network ; September 2015",
+  "valid_until_ledger": 2869304561,
+  "unsigned_entry_xdr": "AAAAAgAAAAAAAAAABfm/y88HrZrQCAzxhinm/V84sLwgRtb0ZUJA9koQiq6AAAAAAAAAAAAAAAAAAAAQAAAAAQAAAAAAAAAAAAAAAUiI6tAuuwNlVSlvqTfyg7VovgLmBCQPXJW+IAGMDDnmAAAACHdpdGhkcmF3AAAAAAAAAAEAAAABAAAAAAAAAAAAAAAAi1EjcrLPLFUZEfbCxLU/DRT4VasOCmXIv6EHoDdwqdQ8p/Kf2I4cHtGUMDzPqknK1YntreqNSUJC2Y1TR1wNPgAAAAA04JZJFcRzEEXwlPDmInJ1nh9rs+mlXDb+1i13ua5RKwAAAAA=",
+  "preimage_xdr": "AAAACs7gMC1ZhE0yvcqRXIID3USzP7t+3BkFHqN6vt8o7NRygAAAAAAAAACrBhzxAAAAAAAAAAAF+b/LzwetmtAIDPGGKeb9XziwvCBG1vRlQkD2ShCKrgAAAAAAAAABSIjq0C67A2VVKW+pN/KDtWi+AuYEJA9clb4gAYwMOeYAAAAId2l0aGRyYXcAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAACLUSNyss8sVRkR9sLEtT8NFPhVqw4KZci/oQegN3Cp1Dyn8p/Yjhwe0ZQwPM+qScrVie2t6o1JQkLZjVNHXA0+AAAAADTglkkVxHMQRfCU8OYicnWeH2uz6aVcNv7WLXe5rlErAAAAAA==",
+  "payload_hex": "f62307b1b4d1e78fd6c843816f21babf7721f4430aaf9f1fb5f736a4710c09db"
+}

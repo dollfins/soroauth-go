@@ -45,7 +45,7 @@ func BenchmarkAuthorizeEntryWithHooks(b *testing.B) {
 	b.Run("no-hook", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			_, _ = AuthorizeEntry(ctx, entry, signer, testValidUntilLedger, network.TestNetworkPassphrase,
-				ForAddress(address))
+				ForAddress(kp.Address()))
 		}
 	})
 
@@ -53,7 +53,7 @@ func BenchmarkAuthorizeEntryWithHooks(b *testing.B) {
 	b.Run("noop-hook", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			_, _ = AuthorizeEntry(ctx, entry, signer, testValidUntilLedger, network.TestNetworkPassphrase,
-				ForAddress(address), WithHook(NoOpHook{}))
+				ForAddress(kp.Address()), WithHook(NoOpHook{}))
 		}
 	})
 
@@ -63,7 +63,7 @@ func BenchmarkAuthorizeEntryWithHooks(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			hook.events = hook.events[:0]
 			_, _ = AuthorizeEntry(ctx, entry, signer, testValidUntilLedger, network.TestNetworkPassphrase,
-				ForAddress(address), WithHook(hook))
+				ForAddress(kp.Address()), WithHook(hook))
 		}
 	})
 }
@@ -77,8 +77,8 @@ func BenchmarkThresholdSigner(b *testing.B) {
 	round, _ := signer.Begin(ctx)
 	share1 := append([]byte("p1"), []byte(kp1.Seed())[:32]...)
 	share2 := append([]byte("p2"), []byte(kp2.Seed())[:32]...)
-	signer.Contribute(ctx, round, share1)
-	signer.Contribute(ctx, round, share2)
+	_, _ = signer.Contribute(ctx, round, share1)
+	_, _ = signer.Contribute(ctx, round, share2)
 
 	b.ResetTimer()
 	b.Run("threshold-sign", func(b *testing.B) {

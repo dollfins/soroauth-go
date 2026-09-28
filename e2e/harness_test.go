@@ -29,6 +29,8 @@ import (
 	"github.com/stellar/go-stellar-sdk/protocols/stellarcore"
 	"github.com/stellar/go-stellar-sdk/txnbuild"
 	"github.com/stellar/go-stellar-sdk/xdr"
+
+	"github.com/soroauth/soroauth-go"
 )
 
 const (
@@ -130,111 +132,6 @@ func newHarness(t *testing.T) *harness {
 		protocolVersion: ledger.ProtocolVersion,
 		friendbotURL:    network.FriendbotURL,
 	}
-}
-
-// deployAndFundFixture deploys any contract fixture with constructor arguments and funds it.
-func (h *harness) deployAndFundFixture(t *testing.T, deployer *keypair.Full, wasmPath string, constructorArgs ...xdr.ScVal) string {
-	t.Helper()
-	wasm, err := os.ReadFile(wasmPath)
-	if err != nil {
-		t.Fatalf("reading wasm at %s: %v", wasmPath, err)
-	}
-
-	acc := h.account(t, deployer.Address())
-	op := txnbuild.CreateContract{
-		Wasm:            wasm,
-		SourceAccount:   deployer.Address(),
-		ConstructorArgs: constructorArgs,
-	}
-
-	tx, err := txnbuild.NewTransaction(txnbuild.TransactionParams{
-		SourceAccount:        acc,
-		IncrementSequenceNum: true,
-		Operations:           []txnbuild.Operation{&op},
-		BaseFee:              txnbuild.MinBaseFee * 100,
-		Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewInfiniteTimeout()},
-	})
-	if err != nil {
-		t.Fatalf("building create contract transaction: %v", err)
-	}
-
-	sim := h.simulate(t, tx, "none", true)
-	finalTx := h.assemble(t, acc, op.BuildInvokeHostFunction(), sim)
-	signed, err := finalTx.Sign(h.passphrase, deployer)
-	if err != nil {
-		t.Fatalf("signing create contract transaction: %v", err)
-	}
-
-	sub := h.send(t, signed)
-	if sub.Status != rpc.TransactionStatusSuccess {
-		t.Fatalf("deploying contract failed: status=%s error=%s", sub.Status, sub.RawError)
-	}
-
-	var txResult xdr.TransactionResult
-	if err := xdr.SafeUnmarshalBase64(sub.Diagnostics[0], &txResult); err == nil { // fallback if needed or parse from result
-	}
-
-	var fullRes xdr.TransactionResult
-	// Use SimulateTransaction or read created contract id from RPC / result
-	// In Soroban, the created contract ID is returned in the simulation/result metadata or we can compute it / read it.
-	// Actually, stellar-sdk txnbuild CreateContract populates ContractID when signed/submitted or we can inspect result meta.
-	// Let's use getTransaction to retrieve the result meta and extract the contract ID.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	txInfo, err := h.client.GetTransaction(ctx, sub.Hash)
-	if err != nil {
-		t.Fatalf("getting transaction %s: %v", sub.Hash, err)
-	}
-	var meta xdr.TransactionMeta
-	if err := xdr.SafeUnmarshalBase64(txInfo.ResultMetaXDR, &meta); err != nil {
-		t.Fatalf("decoding result meta: %v", err)
-	}
-
-	var contractID string
-
-	// Alternatively, use stellar-sdk or compute contract ID from deployer + salt, or fetch from transaction meta LedgerEntryChanges.
-	// Let's use standard stellar-sdk contract ID derivation or extract from LedgerEntryChanges created.
-	contractID, err = extractContractIDFromMeta(meta)
-	if err != nil {
-		t.Fatalf("extracting contract id: %v", err)
-	}
-	return contractID
-}
-
-func extractContractIDFromMeta(meta xdr.TransactionMeta) (string, error) {
-	var changes []xdr.LedgerEntryChange
-	switch meta.V {
-	case 1:
-		if meta.V1 != nil {
-			changes = meta.V1.LedgerChanges
-		}
-	case 2:
-		if meta.V2 != nil {
-			for _, c := range meta.V2.Changes {
-				changes = append(changes, c)
-			}
-		}
-	case 3:
-		if meta.V3 != nil {
-			for _, c := range meta.V3.Changes {
-				changes = append(changes, c)
-			}
-		}
-	}
-	for _, change := range changes {
-		// Safe way using SDK helper or inspecting Created/Updated
-		ledEntry, ok := change.GetCreated()
-		if ok {
-			if contract, ok := ledEntry.Data.GetContractData(); ok {
-				contractIdBytes := contract.Contract.ContractId
-				if contractIdBytes != nil {
-					return stellarcore.Address(contractIdBytes[:]).String(), nil
-				}
-			}
-		}
-	}
-	// Fallback search through all change types
-	return "", fmt.Errorf("contract id not found in transaction meta")
 }
 
 // newAccount generates a keypair and funds it with friendbot.
@@ -607,6 +504,40 @@ type hostErrorDetail struct {
 	HasCode      bool
 	Message      string
 	Args         []uint64
+}
+
+// TestSignerRetryIntegration proves that WithRetry correctly handles simulated transient network faults
+// and respects signature rejections and context cancellation in an integration flow.
+func TestSignerRetryIntegration(t *testing.T) {
+	h := newHarness(t)
+	account := h.newAccount(t, "retry-tester")
+
+	var attempts int
+	transientErr := fmt.Errorf("connection refused")
+
+	retrySigner := soroauth.WithRetry(soroauth.SignerFunc(account.Address(), func(ctx context.Context, preimage xdr.HashIdPreimage, payload [32]byte) (xdr.ScVal, error) {
+		attempts++
+		if attempts < 3 {
+			return xdr.ScVal{}, transientErr
+		}
+		// On 3rd attempt, sign using genuine ed25519 signer
+		realSigner := soroauth.NewEd25519Signer(account)
+		return realSigner.Sign(ctx, preimage, payload)
+	}), soroauth.RetryConfig{
+		Attempts:       4,
+		InitialBackoff: 10 * time.Millisecond,
+		MaxBackoff:     50 * time.Millisecond,
+	})
+
+	var preimage xdr.HashIdPreimage
+	var payload [32]byte
+	_, err := retrySigner.Sign(context.Background(), preimage, payload)
+	if err != nil {
+		t.Fatalf("unexpected error from retrySigner.Sign: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts)
+	}
 }
 
 // hostErrorDetails extracts every error diagnostic from a failure.

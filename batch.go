@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/stellar/go-stellar-sdk/xdr"
 
@@ -210,17 +211,24 @@ func AuthorizeAll(
 
 	var config authorizeAllConfig
 	for _, opt := range opts {
-		opt(&config)
+		if opt != nil {
+			opt(&config)
+		}
 	}
 
 	usedPlans := make(map[string]bool, len(config.delegatePlans))
 	out := make([]xdr.SorobanAuthorizationEntry, 0, len(entries))
+	// topAddresses carries each entry's top-level address, in input order,
+	// so a failure after the main loop (the RequireAllSigned check) can
+	// still name the entry it is reporting. It is empty for source-account
+	// entries, which that check skips.
+	topAddresses := make([]string, len(entries))
 
 	for i, entry := range entries {
 		if entry.Credentials.Type == xdr.SorobanCredentialsTypeSorobanCredentialsSourceAccount {
 			copied, err := xdrcopy.Copy(entry)
 			if err != nil {
-				return nil, fmt.Errorf("soroauth: authorize all: entry %d: %w", i, err)
+				return nil, fmt.Errorf("soroauth: authorize all: entry %d (source account): %w", i, err)
 			}
 			out = append(out, copied)
 			continue
@@ -228,12 +236,13 @@ func AuthorizeAll(
 
 		credentials, err := addressCredentials(entry.Credentials)
 		if err != nil {
-			return nil, fmt.Errorf("soroauth: authorize all: entry %d: %w", i, err)
+			return nil, fmt.Errorf("soroauth: authorize all: entry %d (credentials type %d): %w", i, entry.Credentials.Type, err)
 		}
 		address, err := FormatAddress(credentials.Address)
 		if err != nil {
-			return nil, fmt.Errorf("soroauth: authorize all: entry %d: %w", i, err)
+			return nil, fmt.Errorf("soroauth: authorize all: entry %d (<unformattable address>): %w", i, err)
 		}
+		topAddresses[i] = address
 
 		if plan, ok := config.delegatePlans[address]; ok {
 			wrapped, err := WithDelegates(entry, validUntilLedger, plan.Delegates, plan.TopSignature)
@@ -279,7 +288,7 @@ func AuthorizeAll(
 			}
 			nodes, err := credentialNodes(&out[i])
 			if err != nil {
-				return nil, fmt.Errorf("soroauth: authorize all: entry %d: %w", i, err)
+				return nil, fmt.Errorf("soroauth: authorize all: entry %d (%s): %w", i, topAddresses[i], err)
 			}
 			for _, node := range nodes {
 				if !isSigned(*node.signature) {
@@ -287,7 +296,7 @@ func AuthorizeAll(
 					if formatErr != nil {
 						address = "<unformattable address>"
 					}
-					return nil, fmt.Errorf("soroauth: authorize all: entry %d: %s: %w", i, address,
+					return nil, fmt.Errorf("soroauth: authorize all: entry %d (%s): %w", i, address,
 						&UnsignedCredentialNodeError{Address: address})
 				}
 			}
@@ -295,4 +304,126 @@ func AuthorizeAll(
 	}
 
 	return out, nil
+}
+
+// VerifyResult holds the outcome of verifying a single Soroban authorization entry in a batch.
+type VerifyResult struct {
+	// Index is the position of the entry in the input slice.
+	Index int
+	// Address is the address extracted from the entry's credentials, if parseable.
+	Address string
+	// Error is nil if the entry verification succeeded, or the error encountered.
+	Error error
+}
+
+// verifyConfig holds configuration options for batch verification.
+type verifyConfig struct {
+	concurrency int
+}
+
+// VerifyOption configures batch verification behavior.
+type VerifyOption func(*verifyConfig)
+
+// WithConcurrency sets the maximum number of concurrent goroutines used during batch verification.
+// If n <= 0, concurrency is unbounded (or defaults to runtime limits as appropriate).
+func WithConcurrency(n int) VerifyOption {
+	return func(c *verifyConfig) {
+		c.concurrency = n
+	}
+}
+
+// VerifyAll verifies a slice of Soroban authorization entries in one call, reporting per-entry verdicts.
+//
+// Unlike AuthorizeAll, a failure in one entry does not abort the rest: every entry is checked,
+// and each result contains its own index, address, and error status.
+// Concurrency is bounded and configurable via VerifyOption parameters (e.g. WithConcurrency).
+func VerifyAll(
+	ctx context.Context,
+	entries []xdr.SorobanAuthorizationEntry,
+	networkPassphrase string,
+	opts ...VerifyOption,
+) ([]VerifyResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("soroauth: verify all: %w", err)
+	}
+
+	cfg := verifyConfig{concurrency: 0}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	if len(entries) == 0 {
+		return []VerifyResult{}, nil
+	}
+
+	workerLimit := cfg.concurrency
+	if workerLimit <= 0 {
+		workerLimit = len(entries)
+	}
+	if workerLimit > len(entries) {
+		workerLimit = len(entries)
+	}
+
+	type job struct {
+		index int
+		entry xdr.SorobanAuthorizationEntry
+	}
+
+	jobs := make(chan job, len(entries))
+	for i, entry := range entries {
+		jobs <- job{index: i, entry: entry}
+	}
+	close(jobs)
+
+	results := make([]VerifyResult, len(entries))
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for w := 0; w < workerLimit; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				res := VerifyResult{Index: j.index}
+				local := j.entry
+				if local.Credentials.Type == xdr.SorobanCredentialsTypeSorobanCredentialsSourceAccount {
+					mu.Lock()
+					results[j.index] = res
+					mu.Unlock()
+					continue
+				}
+
+				credentials, err := addressCredentials(local.Credentials)
+				if err != nil {
+					res.Error = err
+					mu.Lock()
+					results[j.index] = res
+					mu.Unlock()
+					continue
+				}
+				addrStr, err := FormatAddress(credentials.Address)
+				if err == nil {
+					res.Address = addrStr
+				}
+
+				rep, err := VerifyEntry(local, networkPassphrase)
+				if err == nil && !rep.Verified() {
+					for _, n := range rep.Nodes {
+						if n.Verdict != VerdictVerified && n.Verdict != VerdictUnsigned {
+							err = fmt.Errorf("node %s verdict %s: %s", n.Address, n.Verdict, n.Reason)
+							break
+						}
+					}
+				}
+				res.Error = err
+				mu.Lock()
+				results[j.index] = res
+				mu.Unlock()
+			}
+		}()
+	}
+
+	wg.Wait()
+	return results, nil
 }

@@ -25,6 +25,15 @@ const scAddressPayloadLen = 32
 // claimable balances) names something that cannot appear in an address
 // credential at all.
 //
+// Only the canonical SEP-23 base32 spelling of an address is accepted: upper
+// case A-Z and 2-7, no padding, no surrounding whitespace, no extra characters,
+// and any unused trailing bits set to zero. A strkey that decodes to the right
+// version byte and payload but is not that canonical spelling — lower-cased,
+// padded, wrapped in whitespace, or carrying non-zero unused bits — is refused,
+// so a caller can never be handed a string that means the same bytes here but
+// re-encodes differently elsewhere. The rejection is a strkey decoder refusal
+// (SEP-23; go-stellar-sdk strkey.decodeString) rather than a check made here.
+//
 // The returned error wraps strkey's own error for malformed input, so a bad
 // checksum is distinguishable from a well-formed address of the wrong kind.
 func ParseAddress(s string) (xdr.ScAddress, error) {

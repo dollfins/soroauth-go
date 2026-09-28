@@ -14,6 +14,9 @@ go test ./...
 
 That is the whole setup for the library and CLI. Go 1.25.0 or later.
 
+The pinned `github.com/stellar/go-stellar-sdk` version and the policy for
+moving it live in [docs/sdk-support.md](docs/sdk-support.md).
+
 Two optional pieces need more:
 
 - **Regenerating golden vectors** needs Node (>= 22.12.0, what
@@ -26,7 +29,8 @@ Two optional pieces need more:
   [The nested adapter module](#the-nested-adapter-module).
 - **Running the Python parity harness** needs Python 3.10+ and the pinned SDK
   in `testdata/parity-python/requirements.txt`; `make parity` creates a venv
-  and installs it.
+  and installs it. The differential fuzzing harness reuses the same venv and
+  SDK: `make differential`.
 - **Working on the WebAssembly core or the TypeScript wrapper** needs Node
   (the same 22+ the rest of the tooling uses). `make wasm-check` builds the
   module and proves it byte-identical to the golden vectors; `make ts-test`
@@ -44,11 +48,13 @@ rather than across several documents. Run `make help` for the list.
 | `make vet` | `go vet ./...` |
 | `make test` | `go test ./...` |
 | `make build` | builds the CLI to `bin/soroauth` |
-| `make vectors` | `cd testdata/gen && npm ci && node gen.mjs` |
+| `make vectors` | `cd testdata/gen && npm ci && node gen.mjs && node gen-passkey.mjs` |
 | `make vectors-check` | regenerates the vectors and fails if the committed files changed |
+| `make demo-check` | checks the browser demo's logic against the pinned SDK (`node examples/browser-passkey/app.test.mjs`) |
 | `make e2e` | builds the test contract with `stellar-cli` and runs `go test -tags e2e -v ./e2e/...` |
 | `make parity` | installs the pinned Python SDK into `.venv-parity` and runs the parity harness and its tests |
 | `make parity-rust` | runs the Rust stellar-xdr parity harness and its tests (needs Rust 1.93.0) |
+| `make differential` | regenerates the differential fuzzing corpus and checks it with the Go, JS and Python implementations |
 | `make wasm` | builds the js/wasm signing core to `wasm/dist/` |
 | `make wasm-check` | builds the wasm core and replays every golden vector through it |
 | `make ts-test` | typechecks and tests the `@soroauth/wasm` TypeScript package |
@@ -70,14 +76,52 @@ The underlying commands are:
 ```sh
 gofmt -l .        # must print nothing
 go vet ./...
+golangci-lint run ./...
 go test -race ./...
 ```
 
-CI runs exactly these, plus the golden-vector drift check and the signing-path
-budget check (see [Benchmarks](#benchmarks)). The suite runs with `-race`
-because `internal/xdrcopy` shares encoder and decoder buffers across calls
-through `sync.Pool`; without the detector, `TestCopyConcurrentReuse` would
-still pass on code that races.
+CI runs all of these except `golangci-lint`, plus the golden-vector drift check
+and the contract build; the signing-path budget check runs on push to main (see
+[Benchmarks](#benchmarks)). `golangci-lint` is a local gate only, because pull
+requests are capped at three checks — see [Linting](#linting).
+
+The suite runs with `-race` because `internal/xdrcopy` shares encoder and
+decoder buffers across calls through `sync.Pool`; without the detector,
+`TestCopyConcurrentReuse` would still pass on code that races.
+
+`internal/xdrcopy` also has a round-trip fuzz target, which the same `-race`
+reasoning covers: it asserts a copy is byte-identical to its source and shares
+no memory with it. Run it locally with
+
+```sh
+go test -fuzz=FuzzCopyRoundTrip -fuzztime=30s ./internal/xdrcopy
+```
+
+## Linting
+
+The gate is `.golangci.yml`, run locally. There is no `lint` job in
+`.github/workflows/ci.yml`: pull requests are capped at three checks, and the
+two that gate a merge are `vet and test` and `golden vectors are reproducible`.
+Run the linter before you push; a reviewer may also run it.
+
+The config is deliberately small, and each linter in it is there because the
+project would actually fix what it reports; the file says which and why, and
+which linters are off on purpose. A linter whose findings are all suppressed
+should be deleted rather than left as decoration.
+
+The config was verified against `v2.14.0`. Install that version and run it from
+the repository root:
+
+```sh
+GOBIN="$PWD/.tools" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+./.tools/golangci-lint run ./...
+```
+
+`.tools/` is gitignored. `golangci-lint run` prints `0 issues.` and exits 0 when
+clean; a finding names the file, the line and the linter. Fix a finding rather
+than excluding it. The one documented exception is `fmt.Fprint*` to the CLI's
+own stdout/stderr streams, listed under `errcheck.exclude-functions`; adding to
+that list needs a reason in the config, not a `//nolint` at the call site.
 
 ### The nested adapter module
 
@@ -109,8 +153,8 @@ not tagged yet; once it is, the adapter is the module that needs its own
 
 The golden vectors prove soroauth agrees with `@stellar/stellar-sdk`. They
 cannot prove that agreement is *correct*, because a bug shared by both
-implementations would be frozen into the vectors. Two harnesses close that gap
-by recomputing the vectors with other implementations:
+implementations would be frozen into the vectors. Three harnesses close that
+gap by recomputing the vectors with other implementations:
 
 - **Python** (`testdata/parity-python/`), against the separately maintained
   `stellar-sdk` on PyPI. `make parity` imports every vector, rebuilds the
@@ -123,14 +167,23 @@ by recomputing the vectors with other implementations:
   `Cargo.toml` and `Cargo.lock` and the harness refuses to run against another
   version. Cases with no preimage (source-account entries) are skipped loudly
   and counted, and a run that checks nothing fails.
+- **Differential fuzzing** (`testdata/differential/`), which is the one that
+  reaches the entries nobody wrote down. `cmd/difffuzz` generates a random but
+  deterministic corpus across every credentials arm and records this library's
+  preimage and payload for each; `make differential` then requires
+  `@stellar/stellar-sdk` and the Python `stellar-sdk` to reproduce every one.
+  A case that diverged is frozen into `testdata/differential/regressions/` and
+  keeps being checked. **A divergence is a release blocker.**
 - **WebAssembly** (`wasm/parity.mjs`), against the wasm build of this same
   library. `make wasm-check` proves the browser build emits the same bytes as
   the native one.
 
-Both are pinned: the Python SDK in `requirements.txt`, the JS SDK in
-`testdata/gen/package.json`. **Never edit a vector to make a harness pass.** A
-disagreement means one implementation is wrong; open an issue with the protocol
-reference (CAP-46-11, CAP-71-01, CAP-71-02) and investigate.
+The golden-vector harnesses are pinned: the Python SDK in `requirements.txt`,
+the JS SDK in `testdata/gen/package.json`, the differential verifier's JS SDK
+in `testdata/differential/package.json`. **Never edit a vector or a corpus case
+to make a harness pass.** A disagreement means one implementation is wrong;
+open an issue with the protocol reference (CAP-46-11, CAP-71-01, CAP-71-02) and
+investigate.
 
 ## The WebAssembly core and the TypeScript wrapper
 
@@ -312,22 +365,45 @@ failure the vectors exist to prevent. CI regenerates them on every push and
 fails if the committed files differ, so an edit will be caught — but the reason
 not to do it is that it destroys the evidence, not that you will be caught.
 
+There are two generators, because there are two things being proven:
+
+- `gen.mjs` writes `testdata/vectors/*.json`, the authorization-entry vectors,
+  against a pinned `@stellar/stellar-sdk`.
+- `gen-passkey.mjs` writes `testdata/vectors/passkey/*.json`, the passkey
+  signature-shape vectors, against a pinned `smart-account-kit`. The passkey
+  shape is not protocol-defined — a custom account's `__check_auth` decides it —
+  so there is no CAP to cite and the evidence is a real wallet library's output
+  instead.
+
 To change them, change the generator:
 
 ```sh
 cd testdata/gen
 npm ci
 node gen.mjs
+node gen-passkey.mjs
 ```
 
 Then commit the regenerated files together with the generator change.
+
+### Versioning the vector schema and reproducing failures
+
+Every golden vector carries an explicit `schema_version` field (currently `1`). The loader (`golden_test.go`) explicitly checks this version and rejects any unknown or missing schema version rather than guessing or ignoring removed/reinterpreted fields.
+
+- **Bumping the version:** When a protocol change or schema evolution requires altering the structure of golden vectors, increment `schema_version` in both the generator (`testdata/gen/gen.mjs`) and all committed vector JSON files under `testdata/vectors/`, and update the expected version check in `golden_test.go`.
+- **Reproducing a failure locally:** If a vector fails schema validation or drifts from the reference implementation, run `go test -run TestGoldenVectors` (or `make vectors-check`) from the repository root. The test suite will fail loudly, naming the vector and the exact mismatch or unsupported schema version.
 
 If a vector disagrees with the Go code, the Go code is wrong until proven
 otherwise. If you believe the vector itself is wrong, stop and open an issue
 saying why, with the protocol reference — do not change it to make a test pass.
 
-The generator refuses to run against any `@stellar/stellar-sdk` other than the
-pinned 17.1.0, since a vector from another build is not evidence about this one.
+Each generator refuses to run against a library other than the version it is
+pinned to, since a vector from another build is not evidence about this one.
+`gen-passkey.mjs` additionally records the `@stellar/stellar-sdk` version
+`smart-account-kit` resolved and refuses a mismatch, and
+`passkey_golden_test.go` asserts both the inner signature map and the library's
+complete output, so the one-element vector `smart-account-kit` wraps its map in
+is pinned rather than assumed.
 
 ## Shared fixture deployment harness & running e2e tests
 
@@ -376,18 +452,44 @@ between releases.
   go test -tags e2e -v ./e2e/...
   ```
 
+## Parity reports
+
+The e2e suite writes a machine-readable `parity-report.json` alongside
+`RESULTS.md`, listing every scenario with its vector id, implementation,
+verdict and observed credential arm, so a parity regression can be read by a
+tool rather than by eye.
+
+`TestParityReportRegression` checks that report's shape: a non-zero scenario
+count, and a vector id and verdict on every entry. It needs no network — when
+no live report is present it reads the committed fixture at
+`e2e/testdata/parity_regression.json` — so it runs in CI as a step of the `vet
+and test` job, and a regression fails the build rather than only a local run:
+
+```sh
+go test -tags e2e -run TestParityReportRegression ./e2e
+```
+
+To debug a failure, inspect the generated `parity-report.json` in the
+repository root after a full e2e run; it carries the per-scenario verdicts the
+test is asserting over.
+
 ## Coverage reporting (CI)
 
-The CI pipeline (`coverage` job in `.github/workflows/ci.yml`) measures test
-coverage on every push and PR, enforces a floor of **80%**, and publishes the
-report via Codecov.
+The `coverage` job in `.github/workflows/ci-go.yml` measures test coverage,
+enforces a floor of **60%**, and publishes the report via Codecov. It runs on
+push to `main` and on demand, not on pull requests: pull requests carry only the
+three checks the branch ruleset requires.
 
 - Run locally to check your coverage before pushing:
   ```sh
   go test -coverprofile=coverage.out -covermode=atomic ./...
   go tool cover -func=coverage.out | awk '/total/{print $3}'
   ```
-- The floor is set to 80%. If it drops, the `coverage` job fails.
+- The floor is 60%, and it is a floor set below a measured total rather than an
+  aspiration. The 80% it replaced never passed: every push to `main` while it
+  was in place reported around 62% and failed. Raise it as tests are added;
+  never lower it without a fresh measurement named in the commit body. The
+  number in the job (`floor=60`) is the authority; this document follows it.
 - The report is visible in the CI logs and on Codecov without digging through
   artifacts.
 
@@ -418,7 +520,7 @@ go test -run 'TestParseAddressWithRandomXDR|TestFormatAddressRejectsInvalidXDR' 
 ### Reproducing a property test failure
 
 If a property test fails, the output will show the seed and the generated value
-that caused the failure. To reproduce:
+that causes the failure. To reproduce:
 
 ```sh
 # 1. Note the seed from the failure output (e.g., "failed with initial seed: 12345")
@@ -429,11 +531,103 @@ go test -run TestParseAddressFormatAddressProperty -v -count=1 ./... 2>&1 | head
 go test -run TestParseAddressFormatAddressDeterministic -v ./...
 ```
 
+Similarly, to run and reproduce expiration and signature consistency property tests for `AuthorizeEntry` across all address arms and delegate tree depths:
+
+```sh
+go test -run TestAuthorizeEntryExpirationProperty -v ./...
+```
+
 The deterministic test (`TestParseAddressFormatAddressDeterministic`) runs a
 fixed set of 100 iterations per property with seed `0xDEADBEEF` and is the one
 executed in CI. If it passes locally but the full property test fails, the
 failure is in the extended search space — increase `MinSuccessfulTests` in the
 deterministic test to narrow it down.
+
+### Fuzzing ValidateDelegateOrder
+
+`FuzzValidateDelegateOrder` in `delegates_test.go` feeds arbitrary bytes to the
+XDR decoder and, for anything that decodes to an entry, asserts that
+`ValidateDelegateOrder` neither panics nor accepts a delegate array that is
+mis-ordered or carries a duplicate at one level. Its seed corpus is built from a
+golden vector, a hand-built well-formed tree, and that tree with one delegate
+address overwritten to duplicate its sibling.
+
+The seeds are constructed with `f` passed to the test helpers, which take
+`testing.TB`. Do not build a `&testing.T{}` literal to satisfy them: it is an
+uninitialised struct, so `Helper()` and `Fatalf()` on it panic instead of
+reporting, and a seed that failed to build would take the whole target down
+rather than failing it.
+
+The fuzz run itself is not a pull-request check — 30 seconds of fuzzing per push
+would slow every review for a target whose job is to find inputs over time. It
+runs on push to `main` and on demand, as the `fuzz` job in
+`.github/workflows/ci-go.yml`. What a pull request does exercise is the seed
+corpus, through the ordinary `go test ./...`.
+
+To run it locally:
+
+```sh
+go test -run='^$' -fuzz=FuzzValidateDelegateOrder -fuzztime=30s .
+
+### Fuzzing
+
+The library includes fuzz tests for `Inspect` (`FuzzInspect` in `inspect_test.go`) to ensure arbitrary byte sequences never panic and always return either a valid `EntryInfo` or an error, never a half-populated struct alongside an error.
+
+#### Running fuzz tests locally
+
+```sh
+go test -run=^$ -fuzz=FuzzInspect -fuzztime=30s .
+```
+
+If a fuzz test fails, Go writes the failing input corpus item to a subdirectory under `testdata/fuzz/`. To reproduce or debug a captured failure:
+
+```sh
+go test -run=FuzzInspect/testdata/fuzz/FuzzInspect/<seed-name> .
+```
+
+### The fuzz seed corpus
+
+`FuzzValidateDelegateOrder`'s seed corpus is generated from the golden vectors,
+which are the entries this library is proven against: every credential arm, a
+sub-invocation tree, a create-contract invocation, the int64 nonce edges, and
+three delegate shapes including one address at two nesting depths. Seeding from
+real entries means the fuzzer's mutations start inside the space of things that
+decode, rather than spending its budget discovering what a valid entry looks
+like.
+
+Regenerate it from the repository root:
+
+```sh
+go run ./cmd/gencorpus
+```
+
+The seeds land in `testdata/fuzz/FuzzValidateDelegateOrder/`. That path is not a
+choice: Go reads a target's seed corpus from `testdata/fuzz/<TargetName>` and
+nowhere else, and each file must be in Go's corpus format (a
+`go test fuzz v1` header, then one Go literal per fuzz argument) or it fails the
+package's tests instead of being skipped. `gencorpus` writes the decoded entry
+bytes, since the target's argument is the `[]byte` it passes to
+`UnmarshalBinary`.
+
+Every seed is run by the ordinary suite, as a named subtest — no `-fuzz` flag
+needed, so a seed that starts failing fails `go test ./...`:
+
+```sh
+go test -run FuzzValidateDelegateOrder -v .
+```
+
+```
+=== RUN   FuzzValidateDelegateOrder/v2_sub_invocations_0
+--- PASS: FuzzValidateDelegateOrder (0.01s)
+```
+
+The generator is deterministic, so CI regenerates the corpus and fails on drift,
+the same way it does for the vectors themselves. Do not hand-edit a seed: change
+the vectors or the generator and regenerate.
+
+For the fuzz *run* — the part that searches for new inputs — see the `fuzz` job
+in `.github/workflows/ci-go.yml`, which runs on push to `main` and on demand
+rather than on pull requests.
 
 ### Capturing regressions
 

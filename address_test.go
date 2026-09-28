@@ -13,7 +13,7 @@ import (
 
 // testKeypair derives a deterministic public test keypair from a label. These
 // keys are public by construction and must never be funded on mainnet.
-func testKeypair(t *testing.T, label string) *keypair.Full {
+func testKeypair(t testing.TB, label string) *keypair.Full {
 	t.Helper()
 	kp, err := keypair.FromRawSeed(sha256.Sum256([]byte(label)))
 	if err != nil {
@@ -23,7 +23,7 @@ func testKeypair(t *testing.T, label string) *keypair.Full {
 }
 
 // testContractAddress derives a deterministic C… address from a label.
-func testContractAddress(t *testing.T, label string) string {
+func testContractAddress(t testing.TB, label string) string {
 	t.Helper()
 	sum := sha256.Sum256([]byte(label))
 	address, err := strkey.Encode(strkey.VersionByteContract, sum[:])
@@ -188,6 +188,29 @@ func TestParseAddressRejects(t *testing.T) {
 			address:     valid[:len(valid)-2],
 			wantMessage: "parse address",
 		},
+		{
+			// Canonicality is pinned in full by
+			// TestParseAddressRejectsNonCanonicalEncodings; these four only
+			// keep the plain rejection path covered here too.
+			name:        "lowercased",
+			address:     strings.ToLower(valid),
+			wantMessage: "parse address",
+		},
+		{
+			name:        "leading whitespace",
+			address:     " " + valid,
+			wantMessage: "parse address",
+		},
+		{
+			name:        "base32 padding",
+			address:     valid + "=",
+			wantMessage: "parse address",
+		},
+		{
+			name:        "extra trailing character",
+			address:     valid + "A",
+			wantMessage: "parse address",
+		},
 	}
 
 	for _, tt := range tests {
@@ -201,6 +224,109 @@ func TestParseAddressRejects(t *testing.T) {
 			}
 			if got != (xdr.ScAddress{}) {
 				t.Errorf("ParseAddress returned %+v alongside an error, want the zero value", got)
+			}
+		})
+	}
+}
+
+// TestParseAddressRejectsNonCanonicalEncodings pins the canonicality rule
+// documented on ParseAddress: only the canonical SEP-23 base32 spelling of an
+// address is accepted, even when a laxer decoder could recover the same version
+// byte and payload from a non-canonical one.
+//
+// Every rejection is asserted together with the canonical spelling of the same
+// address being accepted, so the test proves the refusal is about the encoding
+// rather than about the key. The expected reason is part of each case, because
+// a rejection test that only asserts "it failed" passes for the wrong reason.
+func TestParseAddressRejectsNonCanonicalEncodings(t *testing.T) {
+	account := testKeypair(t, "soroauth-address-account").Address()
+	contract := testContractAddress(t, "soroauth-address-canonical-contract")
+
+	// The canonical spellings this table mutates must parse, or the rest of the
+	// test would be pinning the wrong thing.
+	for _, address := range []string{account, contract} {
+		if _, err := ParseAddress(address); err != nil {
+			t.Fatalf("ParseAddress(%q) rejected the canonical address: %v", address, err)
+		}
+	}
+
+	tests := []struct {
+		name       string
+		address    string
+		wantReason string
+	}{
+		{
+			name:       "lower-cased account address",
+			address:    strings.ToLower(account),
+			wantReason: "base32 decode failed",
+		},
+		{
+			name:       "lower-cased contract address",
+			address:    strings.ToLower(contract),
+			wantReason: "base32 decode failed",
+		},
+		{
+			name:       "mixed-case account address",
+			address:    strings.ToUpper(account[:1]) + strings.ToLower(account[1:]),
+			wantReason: "base32 decode failed",
+		},
+		{
+			name:       "leading whitespace",
+			address:    " " + account,
+			wantReason: "non-canonical",
+		},
+		{
+			name:       "trailing whitespace",
+			address:    account + " ",
+			wantReason: "non-canonical",
+		},
+		{
+			name:       "trailing newline",
+			address:    account + "\n",
+			wantReason: "non-canonical",
+		},
+		{
+			name:       "base32 padding",
+			address:    account + "=",
+			wantReason: "non-canonical",
+		},
+		{
+			name:       "extra trailing character",
+			address:    account + "A",
+			wantReason: "non-canonical",
+		},
+		{
+			// A 55-character body leaves three unused bits in its final
+			// character. 'B' has value 1, so those bits are non-zero and the
+			// decoder refuses on canonicality before it ever reaches the
+			// checksum.
+			name:       "non-zero unused trailing bits",
+			address:    account[:len(account)-2] + "B",
+			wantReason: "non-canonical",
+		},
+		{
+			name:       "0 is not in the base32 alphabet",
+			address:    account[:len(account)-1] + "0",
+			wantReason: "base32 decode failed",
+		},
+		{
+			name:       "1 is not in the base32 alphabet",
+			address:    account[:len(account)-1] + "1",
+			wantReason: "base32 decode failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseAddress(tt.address)
+			if err == nil {
+				t.Fatalf("ParseAddress(%q) accepted a non-canonical address, returning %+v", tt.address, got)
+			}
+			if got != (xdr.ScAddress{}) {
+				t.Errorf("ParseAddress returned %+v alongside an error, want the zero value", got)
+			}
+			if !strings.Contains(err.Error(), tt.wantReason) {
+				t.Errorf("error %q does not carry the decoder reason %q", err, tt.wantReason)
 			}
 		})
 	}

@@ -1,6 +1,10 @@
 /**
  * Types for the soroauth WebAssembly signing core.
  *
+ * Exported Symbol Rationale:
+ *   - RawBindings / Soroauth: exposes only the narrowed core functions needed
+     //   for browser passkey signing, preimage derivation, and signature attachment.
+ *
  * The Go module returns a plain object per call. On success it carries
  * `ok: true` plus the result fields; on failure `ok: false` and a message. These
  * raw shapes are described here (the module is the contract), while

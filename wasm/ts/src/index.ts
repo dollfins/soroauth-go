@@ -2,6 +2,12 @@
  * @soroauth/wasm -- a typed wrapper around the soroauth WebAssembly signing
  * core.
  *
+ * Exported API Rationale:
+ *   - preimage: constructs and hashes authorization preimages locally.
+ *   - payload: hashes raw base64 XDR preimages for remote signers.
+ *   - writeSignature: applies external signatures (e.g., passkeys) to specific nodes.
+ *   - authorizeWithSeed: facilitates local testing with seed-based keypairs.
+ *
  * The core builds a Soroban authorization preimage, hashes it to the payload a
  * signer signs, and writes an externally produced signature back onto an entry.
  * That is the whole browser signing path for passkeys: the wallet derives the

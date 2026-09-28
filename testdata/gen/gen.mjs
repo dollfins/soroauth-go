@@ -66,6 +66,10 @@ if (loadedVersion !== REQUIRED_SDK_VERSION) {
 
 const SDK = `@stellar/stellar-sdk@${loadedVersion}`;
 
+// SCHEMA_VERSION is the version stamped into every vector. golden_test.go
+// asserts it, so the two move together or the drift check fails.
+const SCHEMA_VERSION = 1;
+
 // ---------------------------------------------------------------------------
 // Fixed inputs
 // ---------------------------------------------------------------------------
@@ -516,6 +520,12 @@ const generate = async (testCase) => {
   const signedXdr = signed.toXDR("base64");
 
   return {
+    // The vector schema's version, written by the generator so that a reader
+    // can tell which shape it is holding. golden_test.go refuses a vector
+    // whose version it does not know, rather than silently reading fields
+    // that may have moved. Bump it when a field is renamed, removed, or
+    // changes meaning; adding an optional field does not need a bump.
+    schema_version: SCHEMA_VERSION,
     name: testCase.name,
     sdk: SDK,
     network_passphrase: testCase.networkPassphrase,

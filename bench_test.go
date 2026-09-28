@@ -2,9 +2,10 @@ package soroauth
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
+	"fmt"
+	"github.com/stellar/go-stellar-sdk/keypair"
 	"github.com/stellar/go-stellar-sdk/network"
 	"github.com/stellar/go-stellar-sdk/xdr"
 )
@@ -92,5 +93,76 @@ func BenchmarkNonceTrackerReserve(b *testing.B) {
 		if err := tracker.Reserve(ctx, "GBEXAMPLE", int64(i)); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkVerifyEntry(b *testing.B) {
+	kp, err := keypair.Random()
+	if err != nil {
+		b.Fatalf("random keypair: %v", err)
+	}
+	signer := NewEd25519Signer(kp)
+	entry := entryForArm(nil, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 1)
+
+	address, err := ParseAddress(kp.Address())
+	if err != nil {
+		b.Fatalf("parse address: %v", err)
+	}
+	cred, err := addressCredentials(entry.Credentials)
+	if err != nil {
+		b.Fatalf("credentials: %v", err)
+	}
+	cred.Address = address
+
+	signedSlice, err := AuthorizeAll(context.Background(), []xdr.SorobanAuthorizationEntry{entry}, []Signer{signer}, 100, network.TestNetworkPassphrase)
+	if err != nil {
+		b.Fatalf("authorize: %v", err)
+	}
+	signed := signedSlice[0]
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = VerifyEntry(signed, network.TestNetworkPassphrase)
+	}
+}
+
+func BenchmarkVerifyAll(b *testing.B) {
+	kp, err := keypair.Random()
+	if err != nil {
+		b.Fatalf("random keypair: %v", err)
+	}
+	signer := NewEd25519Signer(kp)
+	entry := entryForArm(nil, xdr.SorobanCredentialsTypeSorobanCredentialsAddressV2, 1)
+
+	address, err := ParseAddress(kp.Address())
+	if err != nil {
+		b.Fatalf("parse address: %v", err)
+	}
+	cred, err := addressCredentials(entry.Credentials)
+	if err != nil {
+		b.Fatalf("credentials: %v", err)
+	}
+	cred.Address = address
+
+	signedSlice, err := AuthorizeAll(context.Background(), []xdr.SorobanAuthorizationEntry{entry}, []Signer{signer}, 100, network.TestNetworkPassphrase)
+	if err != nil {
+		b.Fatalf("authorize: %v", err)
+	}
+
+	entries := []xdr.SorobanAuthorizationEntry{signedSlice[0], signedSlice[0]}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = VerifyAll(context.Background(), entries, network.TestNetworkPassphrase, WithConcurrency(2))
+	}
+}
+
+func BenchmarkDescribeSignatureShape(b *testing.B) {
+	passkeyBytes := make([]byte, 64)
+	sig := xdr.ScVal{Type: xdr.ScValTypeScvBytes, Bytes: (*xdr.ScBytes)(&passkeyBytes)}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = DescribeSignature(sig)
 	}
 }

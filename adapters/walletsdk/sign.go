@@ -92,6 +92,9 @@ func Sign(
 	validUntilLedger uint32,
 	networkPassphrase string,
 ) (*Signed, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("walletsdk: sign: %w", err)
+	}
 	signer, err := NewSigner(kp)
 	if err != nil {
 		return nil, fmt.Errorf("walletsdk: sign: %w", err)

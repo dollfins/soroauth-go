@@ -3,6 +3,16 @@
 // Command soroauthwasm compiles the soroauth signing core to WebAssembly and
 // exposes it to JavaScript on globalThis.soroauth.
 //
+// Rationale for the exported API surface:
+//   - preimage: derives the signing HashIdPreimage and its 32-byte SHA-256 payload
+//     locally in the browser, eliminating reliance on a trusted server.
+//   - payload: hashes an already constructed preimage (base64 XDR) to its 32-byte
+//     digest, supporting remote signers without entry reconstruction.
+//   - writeSignature: writes an externally produced signature ScVal onto target
+//     credential nodes, maintaining strict isolation of signing keys.
+//   - authorizeWithSeed: provides a deterministic test and local demo path using
+//     an in-memory raw ed25519 seed.
+//
 // Why this exists: passkey signing happens in the browser, and the browser
 // should derive the bytes it signs rather than trust a server to hand them
 // over. This binary is the smallest surface that makes that possible -- build a

@@ -545,7 +545,10 @@ func TUICommand(args []string) error {
 			}
 		case "--valid-until":
 			if i+1 < len(args) {
-				fmt.Sscanf(args[i+1], "%d", &validUntilLedger)
+				// A malformed value leaves validUntilLedger at zero, which the
+				// required-flag check below refuses; the TUI parses its own
+				// flags, so there is no parse error to surface here.
+				_, _ = fmt.Sscanf(args[i+1], "%d", &validUntilLedger)
 				i++
 			}
 		case "--network":

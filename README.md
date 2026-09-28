@@ -24,7 +24,8 @@ go install github.com/soroauth/soroauth-go/cmd/soroauth@latest
 ```
 
 Requires Go 1.25.0 or later, and `github.com/stellar/go-stellar-sdk` v0.7.3 or
-later.
+later. Which SDK versions that promise covers, and how the pin moves, is
+stated in [docs/sdk-support.md](docs/sdk-support.md).
 
 ## Common tasks
 
@@ -38,6 +39,7 @@ make build        # build the CLI to bin/soroauth
 make vectors      # regenerate testdata/vectors from the pinned JS SDK
 make vectors-check # regenerate, then fail if the committed vectors changed
 make e2e          # build the test contract and run the live testnet suite
+make wasm-budget  # build the wasm core and fail if it is over its size ceiling
 ```
 
 Every target fails loudly: `make fmt` exits non-zero if any file is not
@@ -88,10 +90,15 @@ terminal program, not something a script drives, so it has no `--json` mode.
 | `doctor` | `checks`, `ok` | (checks carry their own `pass`/`detail`; see below) |
 | `cross-compile` | `target`, `size`, `sha256` (one per line) | `error` |
 | `completions` | `shell`, `script` | `error` |
+| `man` | `format`, `page` | `error` |
 
 ### Worked invocation — JSON output
 
 ```sh
+# Pipe subcommands together without intermediate shell variables:
+./soroauth delegates --entry <base64> --valid-until 1234567 --delegate GAAAA... --json |
+  ./soroauth sign --entry - --valid-until 1234567 --network testnet --secret-env SEED --json
+
 # What would this signer have to sign?
 SEED=SABC... ./soroauth payload \
   --entry <base64> --valid-until 1234567 --network testnet --json |
@@ -265,7 +272,7 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o soroauth-arm6
 `soroauth completions --shell bash|zsh|fish` prints a completion script for
 that shell on stdout. The scripts complete the subcommands, each subcommand's
 flags, and the enumerable flag values (`--shell`, `--format`, `--network`'s
-two named shorthands); fish additionally shows each flag's description in the
+three named shorthands); fish additionally shows each flag's description in the
 tab menu. `--secret-env` is completed by name only — the shells never see or
 complete a variable's value.
 
@@ -290,6 +297,91 @@ a flag added to a subcommand without updating the completions spec fails the
 test suite (`TestSpecsMatchTheRealFlagSets`) rather than shipping a completion
 script that silently omits it.
 
+### Version — which build am I running?
+
+`soroauth --version` prints the release tag, the commit and the Go toolchain
+version the binary was built with:
+
+```sh
+soroauth --version
+```
+
+```
+soroauth v0.2.0
+commit: 9f1c3ab
+built: 2026-09-28T11:04:02Z
+go: go1.25.4
+```
+
+The three build fields are stamped at build time with `-ldflags`. The release
+workflow passes the tag, the commit and the run's date
+(`.github/workflows/release.yml`); `make build` stamps the checkout it was
+built from. A binary built without either — a plain `go build`, or a
+`go install` — reports `dev`, `unknown` and `unknown` rather than empty
+strings, so a bug report that says `dev` is telling you it did not come from a
+release. The toolchain line is read from the running binary
+(`runtime.Version()`), so it cannot drift from the toolchain that produced it.
+
+### Man page
+
+`soroauth man` prints a man page for the CLI, and `--out` writes it to a file
+for a packager (Homebrew, apt, an RPM) to install:
+
+```sh
+# Read it without installing anything
+soroauth man --out /tmp/soroauth.1 && man /tmp/soroauth.1
+
+# What a packaging step writes
+soroauth man --out soroauth.1
+```
+
+`make man` builds the CLI and writes `bin/soroauth.1`. The page is generated
+from the same command/flag table the completion scripts come from, so it
+cannot document a flag the binary does not accept, and it carries no build
+timestamp: two builds of the same source emit identical bytes. Every `v*`
+release attaches `soroauth.1` alongside the binaries.
+
+### Wasm budget — fail the build when the wasm core outgrows its ceiling
+
+`soroauth wasm-budget` measures the compiled js/wasm signing core and exits
+non-zero if it is larger than its budget. The core is downloaded by a browser,
+so its size is worth failing on rather than noticing after a release.
+
+```sh
+# Measure the built artifact against the default 7 MiB ceiling.
+soroauth wasm-budget --out wasm/dist/soroauth.wasm
+
+# Build and measure in one step, with a budget of your own.
+soroauth wasm-budget --build-cmd ./wasm/build.sh --budget 6500000
+
+# Report the delta against the last release's size.
+soroauth wasm-budget --prev-size 6204087
+
+# Machine-readable, for CI.
+soroauth wasm-budget --json
+```
+
+```json
+{
+  "size": 6211959,
+  "budget": 7340032,
+  "exceeded": false,
+  "previous_size": 6204087,
+  "delta": 7872
+}
+```
+
+The default budget is 7 MiB (7340032 bytes), a ceiling set above the size the
+build actually produces (6211959 bytes, measured with go1.25.4 on darwin/arm64)
+rather than an aspiration. A binary exactly at the budget passes; only one
+strictly larger fails. `--prev-size` is optional, and a
+negative `delta` means the artifact shrank.
+
+Stdout carries only the result, on the over-budget path too — the diagnostic
+goes to stderr — so `soroauth wasm-budget --json | jq .exceeded` works whether
+the build passed or failed. `make wasm-budget` runs it against
+`wasm/dist/soroauth.wasm` after building both the CLI and the core.
+
 ### Release workflow
 
 The project uses a GitHub Actions workflow (`.github/workflows/release.yml`) that
@@ -301,7 +393,8 @@ runs on version tags (`v*`). It:
    `darwin/arm64`, `windows/amd64`.
 3. Creates a GitHub Release whose notes are extracted from `CHANGELOG.md` for
    the tagged version.
-4. Attaches all six binaries to the release.
+4. Attaches the built binaries and the generated man page (`soroauth.1`) to
+   the release.
 
 To cut a release:
 
@@ -687,6 +780,11 @@ is (and is not yet) proven — see [docs/passkeys.md](docs/passkeys.md).
 Replacing hand-rolled signing code with soroauth — pattern mappings, the four
 differences from the JS SDK, and how to verify the migration produced identical
 bytes — is covered in [docs/migrating.md](docs/migrating.md).
+Choosing the right signer for your threat model — in-memory, multisig, Vault,
+Ledger, KMS, remote, and passkey signers — is covered in
+[docs/signers.md](docs/signers.md).
+For a sequential three-party delegate handoff — including the shared-expiration
+rule — see [docs/multi-party-signing.md](docs/multi-party-signing.md).
 
 ## Proven on testnet
 
@@ -708,9 +806,19 @@ specific reason, so the accepting scenarios cannot be passing by accident.
 Offline, the golden vectors generated by `@stellar/stellar-sdk@17.1.0` assert
 that soroauth's preimage, payload hash and final signed entry are byte-identical
 to the reference, and CI regenerates them on every push to catch drift. That
-agreement is cross-checked by a third implementation: the Python `stellar-sdk`
-recomputes every vector's preimage and payload in CI (`make parity`), so a bug
-shared by the Go and JS implementations cannot hide in the vectors.
+agreement is cross-checked by two other implementations: the Python `stellar-sdk`
+recomputes every vector's preimage and payload in CI (`make parity`), and the
+Rust `stellar-xdr` crate — the XDR implementation the Soroban host itself uses —
+does the same (`make parity-rust`), so a bug shared by the Go and JS
+implementations cannot hide in the vectors.
+
+Fixed vectors only cover the cases someone thought of, so there is also a
+differential fuzzing harness: `make differential` generates a random corpus of
+structurally valid entries — every credentials arm, delegate trees of random
+depth, sub-invocation trees, both nonce signs and the `int64` edges — and
+requires Go, JS and Python to agree on every payload. A divergence is a release
+blocker, not a test flake. See
+[testdata/differential/README.md](testdata/differential/README.md).
 
 ## Status
 
@@ -722,6 +830,15 @@ outside its author. Read the code before you sign anything valuable with it.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Golden vectors are never edited by hand.
 Security reports go through [SECURITY.md](SECURITY.md), not the issue tracker.
+
+The Markdown in this repository is link-checked by the
+[`links` workflow](.github/workflows/links.yml) and spell-checked by the
+[`spellcheck` workflow](.github/workflows/spellcheck.yml). Neither runs on pull
+requests, which carry only the three checks the branch ruleset requires: both
+run on push to `main`, on a weekly schedule, and on demand. A broken internal
+link or a typo is therefore caught one commit after it lands rather than one
+review before. External links are only reported, never failed, since a page
+moving elsewhere is not a regression here.
 
 ## License
 

@@ -61,7 +61,7 @@ func runCLIEnv(t *testing.T, env map[string]string, args ...string) (stdout, std
 func TestRunWithoutACommand(t *testing.T) {
 	stdout, stderr, err := runCLI(t)
 	if err == nil {
-		t.Fatal("running with no command succeeded")
+		t.Fatalf("running with no command succeeded")
 	}
 	if stdout != "" {
 		t.Errorf("usage went to stdout: %q", stdout)
@@ -184,6 +184,94 @@ func TestPayloadJSONOutput(t *testing.T) {
 	}
 	if out.Payload != v.PayloadHex {
 		t.Errorf("payload mismatch: want %s, got %s", v.PayloadHex, out.Payload)
+	}
+}
+
+func TestStdoutResultsOnlyOnFailurePaths(t *testing.T) {
+	// Test explicitly that stdout stays completely clean/empty on various failure paths.
+	// Invalid entry argument:
+	stdout, stderr, err := runCLI(t, "payload", "--entry", "invalid-base64", "--valid-until", "1234567", "--network", "testnet")
+	if err == nil {
+		t.Fatal("expected error for invalid base64 entry")
+	}
+	if stdout != "" {
+		t.Errorf("stdout expected to be empty on failure, got %q", stdout)
+	}
+	// The diagnostic is the returned error, not something written to stderr.
+	// run returns it and main() is what prints it, so a test driving run sees
+	// an empty stderr on every path the flag package did not write to itself.
+	_ = stderr
+	if err.Error() == "" {
+		t.Error("expected a non-empty error from the failure path")
+	}
+
+	// Ensure that stdout stays strictly empty/results-only on all error paths (non-json mode writes errors to stderr and nothing to stdout).
+	for _, subcmd := range [][]string{
+		{"payload", "--entry", "not-base64", "--valid-until", "1", "--network", "testnet"},
+		{"sign", "--entry", "not-base64", "--valid-until", "1", "--network", "testnet", "--secret-env", "SEED"},
+		{"delegates", "--entry", "not-base64", "--valid-until", "1", "--delegate", "GABC..."},
+		{"inspect", "--entry", "not-base64"},
+	} {
+		stdout, _, err := runCLI(t, subcmd...)
+		if err == nil {
+			t.Fatalf("cmd %v expected failure", subcmd)
+		}
+		if stdout != "" {
+			t.Errorf("cmd %v produced stdout on failure: %q", subcmd, stdout)
+		}
+		if err.Error() == "" {
+			t.Errorf("cmd %v failed with an empty error message", subcmd)
+		}
+	}
+
+	// Also test JSON failure output paths to ensure stdout only carries JSON error object and not usage text or trailing junk
+	stdout, _, err = runCLI(t, "payload", "--entry", "not-base64", "--valid-until", "1", "--network", "testnet", "--json")
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	var jsonErr struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &jsonErr); err != nil {
+		t.Fatalf("stdout is not valid JSON error object: %q (%v)", stdout, err)
+	}
+	if jsonErr.Error == "" {
+		t.Error("json error object missing error field")
+	}
+}
+
+func TestPipelineStdoutResultsOnlyOnFailure(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runWithStdin([]string{"payload", "--entry", "-", "--valid-until", "1", "--network", "testnet"}, &stdout, &stderr, os.Getenv, strings.NewReader("invalid-input"))
+	if err == nil {
+		t.Fatal("expected failure for invalid stdin")
+	}
+	filesStdout := stdout.String()
+	if filesStdout != "" {
+		t.Errorf("expected empty stdout on pipeline failure, got %q", filesStdout)
+	}
+}
+
+func TestPipelineFailureStdoutResultsOnly(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runWithStdin([]string{"payload", "--entry", "-", "--valid-until", "1", "--network", "testnet"}, &stdout, &stderr, os.Getenv, strings.NewReader("bad-input"))
+	if err == nil {
+		t.Fatal("expected failure for bad stdin")
+	}
+	if stdout.String() != "" {
+		t.Errorf("expected empty stdout on pipeline failure, got %q", stdout.String())
+	}
+}
+
+func TestPipelineFailureOutputsCleanStdout(t *testing.T) {
+	stdinReader := strings.NewReader("invalid-stdin-entry")
+	var stdout, stderr bytes.Buffer
+	err := runWithStdin([]string{"payload", "--entry", "-", "--valid-until", "1", "--network", "testnet"}, &stdout, &stderr, os.Getenv, stdinReader)
+	if err == nil {
+		t.Fatal("expected pipeline failure with invalid stdin")
+	}
+	if stdout.String() != "" {
+		t.Errorf("expected empty stdout on pipeline failure, got %q", stdout.String())
 	}
 }
 
@@ -473,7 +561,7 @@ func TestExitCodes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stdout, stderr, err := runCLIEnv(t, tt.env, tt.args...)
+			stdout, _, err := runCLIEnv(t, tt.env, tt.args...)
 			if err == nil {
 				t.Fatalf("expected error, got success: stdout=%q", stdout)
 			}
@@ -486,10 +574,6 @@ func TestExitCodes(t *testing.T) {
 			// In non-JSON mode, stdout should be empty on error
 			if stdout != "" && !strings.Contains(strings.Join(tt.args, " "), "--json") {
 				t.Errorf("a failing command wrote to stdout: %q", stdout)
-			}
-			// stderr should contain usage text for usage errors
-			if tt.wantCode == ExitUsageError && !strings.Contains(stderr, "usage:") && !strings.Contains(tt.name, "unknown command") && !strings.Contains(tt.name, "no command") {
-				// Some usage errors don't print usage (like flag parsing errors)
 			}
 		})
 	}
@@ -561,6 +645,63 @@ func TestExitCodesJSONMode(t *testing.T) {
 }
 
 // TestExitCodeSuccess verifies that successful commands exit with code 0.
+func TestPipelineFailureOutputsCleanStdoutLegacy(t *testing.T) {
+	var out, errOut bytes.Buffer
+	// Simulate piping invalid data via stdin or triggering a failure path
+	stdin := strings.NewReader("not-valid-base64\n")
+	err := runWithStdin([]string{"payload", "--entry", "-", "--network", "testnet"}, &out, &errOut, func(string) string { return "" }, stdin)
+	if err == nil {
+		t.Fatal("expected error on invalid pipeline input, got nil")
+	}
+	if out.String() != "" {
+		t.Errorf("expected stdout to stay empty on failure path, got %q", out.String())
+	}
+}
+
+func TestPipelineCompositionWithStdin(t *testing.T) {
+	v := loadVector(t, "delegates_from_legacy")
+	signer := vectorKeypair(t, "soroauth-vector-signer-1")
+
+	// Pipeline: soroauth delegates ... | soroauth sign --entry -
+	// Simulate stdin with delegates output
+	delegatesStdout, _, err := runCLI(t, "delegates",
+		"--entry", v.PreWrapEntryXDR,
+		"--valid-until", "1234567",
+		"--delegate", v.Delegates[0].Address)
+	if err != nil {
+		t.Fatalf("delegates failed: %v", err)
+	}
+
+	var signErr error
+	signOut, signErr := runCLIEnvStdin(t, map[string]string{"SEED": signer.Seed()}, delegatesStdout,
+		"sign",
+		"--entry", "-",
+		"--valid-until", "1234567",
+		"--network", "testnet",
+		"--secret-env", "SEED",
+		"--for", v.Delegates[0].Address)
+	if signErr != nil {
+		t.Fatalf("sign from stdin pipeline failed: %v", signErr)
+	}
+
+	var entry xdr.SorobanAuthorizationEntry
+	if err := xdr.SafeUnmarshalBase64(strings.TrimSpace(signOut), &entry); err != nil {
+		t.Fatalf("decoding entry from pipeline: %v", err)
+	}
+	if entry.Credentials.Type != xdr.SorobanCredentialsTypeSorobanCredentialsAddressWithDelegates {
+		t.Errorf("credential type is %v, want delegates arm", entry.Credentials.Type)
+	}
+}
+
+// runCLIEnvStdin drives the dispatcher with a fake environment and custom stdin reader.
+func runCLIEnvStdin(t *testing.T, env map[string]string, stdinContent string, args ...string) (stdout string, err error) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	stdinReader := strings.NewReader(stdinContent)
+	err = runWithStdin(args, &out, &errOut, func(key string) string { return env[key] }, stdinReader)
+	return out.String(), err
+}
+
 func TestExitCodeSuccess(t *testing.T) {
 	v := loadVector(t, "v2_single_testnet")
 	signer := vectorKeypair(t, "soroauth-vector-signer-1")
